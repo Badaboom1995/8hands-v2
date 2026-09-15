@@ -4,7 +4,16 @@
 <meta charset="utf-8">
 <title>agent-v2</title>
 <style>
-  body { font-family: -apple-system, sans-serif; max-width: 720px; margin: 0 auto; padding: 16px; background: #111; color: #eee; }
+  body { font-family: -apple-system, sans-serif; max-width: 1040px; margin: 0 auto; padding: 16px; background: #111; color: #eee; }
+  #layout { display: flex; gap: 16px; align-items: flex-start; }
+  #state { width: 260px; flex: none; border: 1px solid #333; border-radius: 8px; padding: 12px; background: #161616; position: sticky; top: 16px; }
+  #state h4 { margin: 0 0 10px; font-size: 13px; color: #aaa; text-transform: uppercase; letter-spacing: .04em; }
+  #state dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 6px 10px; font-size: 13px; }
+  #state dt { color: #888; }
+  #state dd { margin: 0; color: #eee; word-break: break-word; }
+  #state dd.missing { color: #555; font-style: italic; }
+  #state ul { margin: 6px 0 0; padding-left: 16px; font-size: 12.5px; color: #ccc; }
+  #main { flex: 1; min-width: 0; }
   #log { border: 1px solid #333; border-radius: 8px; padding: 12px; height: 60vh; overflow-y: auto; }
   .msg { margin: 8px 0; padding: 8px 12px; border-radius: 8px; white-space: pre-wrap; }
   .user { background: #1d3a5f; }
@@ -22,12 +31,17 @@
 <body>
 <h3>agent-v2 <span id="status" class="sys">idle</span></h3>
 <div id="stats" class="sys"></div>
-<div id="log"></div>
-<div id="bar">
+<div id="layout">
+  <aside id="state"><h4>Call state</h4><dl id="state-fields"></dl><ul id="state-notes"></ul></aside>
+  <div id="main">
+    <div id="log"></div>
+    <div id="bar">
   <button id="call">📞 Call</button>
   <input id="text" placeholder="Type a message…" autocomplete="off" disabled>
   <button id="send" disabled>Send</button>
   <button id="mic" disabled>🎙 Mic</button>
+    </div>
+  </div>
 </div>
 <script>
 const log = document.getElementById('log');
@@ -39,6 +53,25 @@ const micBtn = document.getElementById('mic');
 
 let ws = null;
 let agentBubble = null;
+
+// Fields in the order the receptionist collects them.
+const STATE_FIELDS = ['intent', 'service', 'manicureType', 'location', 'date', 'time', 'customerName', 'customerPhone'];
+function renderState(state) {
+  const dl = document.getElementById('state-fields');
+  dl.innerHTML = '';
+  for (const key of STATE_FIELDS) {
+    const dt = document.createElement('dt'); dt.textContent = key;
+    const dd = document.createElement('dd');
+    const v = state[key];
+    dd.textContent = v === undefined ? '—' : String(v);
+    if (v === undefined) dd.className = 'missing';
+    dl.append(dt, dd);
+  }
+  const ul = document.getElementById('state-notes');
+  ul.innerHTML = '';
+  for (const n of state.notes || []) { const li = document.createElement('li'); li.textContent = n; ul.appendChild(li); }
+}
+renderState({ notes: [] });
 
 function addMsg(cls, text) {
   const div = document.createElement('div');
@@ -162,6 +195,9 @@ function connect() {
         break;
       case 'tool_call':
         addMsg('sys', `🔧 ${msg.name}(${JSON.stringify(msg.args)}) → ${JSON.stringify(msg.result)}`);
+        break;
+      case 'state':
+        renderState(msg.state);
         break;
       case 'stats': {
         const t = msg.turn, s = msg.total;

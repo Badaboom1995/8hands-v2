@@ -18,6 +18,7 @@ export function browserCodec(): CallCodec {
         turnDone: () => JSON.stringify({ type: 'turn_done' }),
         stats: (stats) => JSON.stringify({ type: 'stats', ...stats }),
         toolCall: (info) => JSON.stringify({ type: 'tool_call', ...info }),
+        state: (state) => JSON.stringify({ type: 'state', state }),
         error: (message) => JSON.stringify({ type: 'error', message }),
     };
 }

@@ -6,6 +6,7 @@
 import WebSocket from 'ws';
 
 import { AgentSession, type AgentSessionOptions } from './session';
+import type { CallState } from './state';
 import type { CallTotals, TurnStats } from './stats';
 
 // Inner format for inbound client messages.
@@ -26,6 +27,7 @@ export interface CallCodec {
     turnDone?(): string | null;
     stats?(stats: { turn: TurnStats; total: CallTotals }): string | null;
     toolCall?(info: { name: string; args: unknown; result: unknown }): string | null;
+    state?(state: CallState): string | null;
     error?(message: string): string | null;
 }
 
@@ -45,6 +47,7 @@ export function attachCall(ws: WebSocket, codec: CallCodec, opts: AgentSessionOp
         onTurnDone: () => out(codec.turnDone?.()),
         onStats: (stats) => out(codec.stats?.(stats)),
         onToolCall: (info) => out(codec.toolCall?.(info)),
+        onState: (state) => out(codec.state?.(state)),
         onError: (message) => out(codec.error?.(message)),
         onClose: () => {
             if (ws.readyState === WebSocket.OPEN) ws.close();

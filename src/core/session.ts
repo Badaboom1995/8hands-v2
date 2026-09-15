@@ -37,6 +37,8 @@ export interface AgentSessionEvents {
     onStats: (stats: { turn: TurnStats; total: CallTotals }) => void;
     /** A tool was executed (for observability/UI). */
     onToolCall: (info: { name: string; args: unknown; result: unknown }) => void;
+    /** Call state after a tool ran (for observability/UI). */
+    onState: (state: CallState) => void;
     onError: (message: string) => void;
     onClose: () => void;
 }
@@ -209,6 +211,7 @@ export class AgentSession {
         const result = { status, ...(outcome as object) };
 
         this.events.onToolCall({ name, args, result });
+        this.events.onState(this.state);
         this.send({
             type: 'conversation.item.create',
             item: {
@@ -304,6 +307,7 @@ export class AgentSession {
                     this.ready = true;
                     for (const payload of this.queued.splice(0)) this.ws.send(payload);
                     this.events.onReady();
+                    this.events.onState(this.state);
                     if (this.opts.greeting) this.speakGreeting(this.opts.greeting);
                 }
                 break;
