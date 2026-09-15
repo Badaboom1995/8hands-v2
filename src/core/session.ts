@@ -6,7 +6,7 @@
 import WebSocket from 'ws';
 
 import { CallStats, type CallTotals, type TurnStats } from './stats';
-import { toRealtimeTool, type AgentTool } from './tools';
+import { parseToolArgs, toRealtimeTool, type AgentTool, type ToolError } from './tools';
 
 export interface AgentSessionOptions {
     apiKey: string;
@@ -17,7 +17,7 @@ export interface AgentSessionOptions {
     /** Wire audio format, both directions. Browser: pcm 24k. Twilio: pcmu. */
     audioFormat?: { type: 'audio/pcm'; rate: 24000 } | { type: 'audio/pcmu' };
     /** Server functions the model may call. */
-    tools?: AgentTool[];
+    tools?: AgentTool<any>[];
     voice?: string;
     debug?: boolean;
 }
@@ -106,13 +106,23 @@ export class AgentSession {
         const tool = (this.opts.tools || []).find((t) => t.name === name);
         let args: unknown = {};
         let result: unknown;
-        try {
-            args = rawArgs ? JSON.parse(rawArgs) : {};
-            result = tool
-                ? await tool.handler(args)
-                : { error: `unknown_tool: ${name}` };
-        } catch (err) {
-            result = { error: 'tool_execution_failed', message: (err as Error).message };
+        if (!tool) {
+            result = { error: 'unknown_tool', message: `no tool named ${name}` } satisfies ToolError;
+        } else {
+            const parsed = parseToolArgs(tool, rawArgs);
+            if (!parsed.ok) {
+                result = parsed.error;
+            } else {
+                args = parsed.args;
+                try {
+                    result = await tool.handler(parsed.args);
+                } catch (err) {
+                    result = {
+                        error: 'tool_execution_failed',
+                        message: (err as Error).message,
+                    } satisfies ToolError;
+                }
+            }
         }
         this.events.onToolCall({ name, args, result });
         this.send({

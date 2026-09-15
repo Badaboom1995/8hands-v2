@@ -3,7 +3,9 @@
 // hourly slots within working hours (Tue–Sun 10:00–20:00), a random
 // subset already "taken". Future booking tool will mutate this store.
 
-import type { AgentTool } from '../core/tools';
+import { z } from 'zod';
+
+import { defineTool } from '../core/tools';
 
 const WEEKDAYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
 const OPEN_HOUR = 10;
@@ -66,34 +68,23 @@ function collectDays(startDate: string, count: number): DayAvailability[] {
     return days;
 }
 
-export const checkAvailabilityTool: AgentTool = {
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+export const checkAvailabilityTool = defineTool({
     name: 'check_availability',
     description:
         'Look up open appointment slots. Returns free start times per day. '
         + 'range "day" = one day, "week" = 7 days, "month" = the next 30 days. '
         + 'Days the salon is closed are omitted; a day with empty freeSlots is fully booked. '
         + 'Use startDate for a specific day the caller asked about; omit it to start from today.',
-    parameters: {
-        type: 'object',
-        properties: {
-            range: {
-                type: 'string',
-                enum: ['day', 'week', 'month'],
-                description: 'How much of the calendar to return.',
-            },
-            startDate: {
-                type: 'string',
-                description: 'First day to check, format YYYY-MM-DD. Defaults to today.',
-            },
-        },
-        required: ['range'],
-    },
-    handler: (args: { range: 'day' | 'week' | 'month'; startDate?: string }) => {
+    args: z.object({
+        range: z.enum(['day', 'week', 'month']).describe('How much of the calendar to return.'),
+        startDate: z.string().regex(ISO_DATE, 'Use YYYY-MM-DD.').optional()
+            .describe('First day to check, format YYYY-MM-DD. Defaults to today.'),
+    }),
+    handler: (args) => {
         const today = isoDate(new Date());
         const start = args.startDate || today;
-        if (!/^\d{4}-\d{2}-\d{2}$/.test(start)) {
-            return { error: 'invalid_start_date', hint: 'Use YYYY-MM-DD.' };
-        }
         const count = args.range === 'day' ? 1 : args.range === 'week' ? 7 : 30;
         const days = collectDays(start, count);
         if (days.length === 0) {
@@ -105,4 +96,4 @@ export const checkAvailabilityTool: AgentTool = {
         }
         return { today, range: args.range, days };
     },
-};
+});
