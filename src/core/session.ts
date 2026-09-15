@@ -132,17 +132,52 @@ export class AgentSession {
     private static readonly EXEC_RETRY_ATTEMPTS = 3;     // server-side retries on handler throw
     private static readonly EXEC_RETRY_BACKOFF_MS = 300;
     private static readonly POST_TOOL_PAUSE_MS = 1000;
+    /** Minimum silence between the end of a filler phrase and the result speech. */
+    private static readonly FILLER_PAUSE_MS = 500;
 
     /** Consecutive failed attempts per tool name, cleared on success. */
     private readonly failedAttempts = new Map<string, number>();
     /** Tool to force on the next response, after the "need a moment" speech finishes. */
     private pendingRetry: string | null = null;
 
+    // ── Filler phrase ──
+    //
+    // The model speaks one short sentence ("let me check the schedule") while the
+    // handler runs. We measure the filler's audio from the bytes we stream, so we
+    // know when playback ends and can hold the result until FILLER_PAUSE_MS later.
+
+    /** Resolves with the wall-clock time the current filler's audio ends. */
+    private fillerDone: ((audioEndsAt: number) => void) | null = null;
+    private audioFirstAt = 0;
+    private audioBytes = 0;
+
+    private speakFiller(what: string): Promise<number> {
+        return new Promise((resolve) => {
+            this.fillerDone = resolve;
+            this.send({
+                type: 'response.create',
+                response: {
+                    tool_choice: 'none',
+                    instructions: `${this.opts.instructions}\n\nSay one short sentence telling the `
+                        + `caller you are ${what}, in the language the caller is speaking. Nothing else.`,
+                },
+            });
+        });
+    }
+
+    /** Duration of the audio streamed in the current response, from byte count. */
+    private audioEndsAt(): number {
+        const format = this.opts.audioFormat || { type: 'audio/pcm', rate: 24000 };
+        const bytesPerMs = format.type === 'audio/pcmu' ? 8 : 48; // pcmu 8kHz×1B, pcm16 24kHz×2B
+        return this.audioFirstAt + this.audioBytes / bytesPerMs;
+    }
+
     private async runTool(name: string, callId: string, rawArgs: string): Promise<void> {
         const tool = (this.opts.tools || []).find((t) => t.name === name);
         // For the trace: what the model sent, even if it fails to parse.
         let args: unknown = safeJson(rawArgs);
         let outcome: unknown;
+        let notBefore = 0; // earliest time the result response may be requested
 
         if (!tool) {
             outcome = { error: 'unknown_tool', message: `no tool named ${name}` } satisfies ToolError;
@@ -152,7 +187,12 @@ export class AgentSession {
                 outcome = parsed.error;
             } else {
                 args = parsed.args;
-                outcome = await this.executeWithRetry(tool, parsed.args);
+                const run = this.executeWithRetry(tool, parsed.args);
+                if (tool.filler) {
+                    const fillerEndsAt = await this.speakFiller(tool.filler);
+                    notBefore = fillerEndsAt + AgentSession.FILLER_PAUSE_MS;
+                }
+                outcome = await run;
             }
         }
 
@@ -185,9 +225,12 @@ export class AgentSession {
             return;
         }
 
-        // Report tools get a guaranteed beat before the agent speaks the result:
-        // fast tools otherwise make "let me check" and the answer collide.
-        const pause = tool?.mode === 'report' && !failed ? AgentSession.POST_TOOL_PAUSE_MS : 0;
+        // With a filler: wait until FILLER_PAUSE_MS after its audio ends. Without
+        // one, report tools still get a beat so "let me check" and the answer
+        // don't collide.
+        let pause = 0;
+        if (notBefore) pause = Math.max(0, notBefore - Date.now());
+        else if (tool?.mode === 'report' && !failed) pause = AgentSession.POST_TOOL_PAUSE_MS;
         setTimeout(() => this.send({ type: 'response.create' }), pause);
     }
 
@@ -265,7 +308,14 @@ export class AgentSession {
                 }
                 break;
 
+            case 'response.created':
+                this.audioFirstAt = 0;
+                this.audioBytes = 0;
+                break;
+
             case 'response.output_audio.delta':
+                if (!this.audioFirstAt) this.audioFirstAt = Date.now();
+                this.audioBytes += Math.floor((event.delta?.length ?? 0) * 3 / 4); // base64 → bytes
                 this.events.onAudio(event.delta);
                 break;
 
@@ -302,6 +352,11 @@ export class AgentSession {
                 );
                 if (calls.length > 0) {
                     for (const call of calls) void this.runTool(call.name, call.call_id, call.arguments);
+                } else if (this.fillerDone) {
+                    // The filler just finished generating; report when its audio ends.
+                    const resolve = this.fillerDone;
+                    this.fillerDone = null;
+                    resolve(this.audioBytes ? this.audioEndsAt() : Date.now());
                 } else if (this.pendingRetry) {
                     // The "need a moment" speech just finished; now force the corrected call.
                     const name = this.pendingRetry;

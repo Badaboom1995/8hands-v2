@@ -25,6 +25,13 @@ export interface AgentTool<TArgs = unknown> {
      * report: the model acknowledges it checked and shares the result.
      */
     mode: 'silent' | 'report';
+    /**
+     * If set, the agent speaks one short filler sentence before the tool runs,
+     * e.g. "checking the schedule" → "One moment, let me check the schedule."
+     * The handler runs while the filler plays; the result is spoken at least
+     * FILLER_PAUSE_MS after the filler audio ends.
+     */
+    filler?: string;
     /** Server-side implementation. Whatever it returns is JSON-serialized
      *  back to the model as the function result. */
     handler: (args: TArgs, ctx: ToolContext) => Promise<unknown> | unknown;

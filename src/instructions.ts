@@ -48,6 +48,6 @@ TOOLS — every tool result has a "status" field. React like this:
 - "recovered": say briefly that it's sorted now, then ask the next question.
 - "gave_up": apologize briefly, say you'll pass it to the front desk, and go on
   without that detail.
-check_availability is the exception: on "ok", acknowledge briefly that you
-checked (vary the phrase), then share at most 2-3 times.
+check_availability is the exception: on "ok", share at most 2-3 of the times
+it returned. You already told the caller you were checking, so don't repeat it.
 `.trim();

@@ -127,7 +127,11 @@ In this repo:
     uses it; switch back to `instructions.ts` for normal runs.
   - `core/state.ts` — `CallState`, the server-owned record of what the caller has
     established, plus the Zod patch schema the model must satisfy to change it.
-  - `core/tools.ts` — `defineTool` with a Zod args schema and `mode: 'silent' | 'report'`.
+  - `core/tools.ts` — `defineTool` with a Zod args schema, `mode: 'silent' | 'report'`,
+    and optional `filler` ("checking the schedule"): the agent speaks one filler
+    sentence while the handler runs, and the result is spoken no sooner than
+    500 ms after the filler audio ends (audio length measured from streamed bytes).
+    Tool calls are synchronous by design; Realtime has no true background.
   - `core/transport.ts`, `codecs/` — one call lifecycle, per-client wire dialects.
   - `tools/` — `update_call_state` (silent; the only way facts enter state) and
     `check_availability` (report; reads the studio from state).
