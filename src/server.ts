@@ -8,10 +8,8 @@ import path from 'node:path';
 import { WebSocketServer } from 'ws';
 
 import { browserCodec } from './codecs/browser';
-import { GREETING, INSTRUCTIONS } from './instructions';
+import { GREETING, INSTRUCTIONS, TEST_TOOLS } from './instructions-test-retry';
 import { attachCall } from './core/transport';
-import { checkAvailabilityTool } from './tools/availability';
-import { updateCallStateTool } from './tools/update-state';
 
 const API_KEY = process.env.OPENAI_API_KEY;
 const MODEL = process.env.OPENAI_REALTIME_MODEL || 'gpt-realtime';
@@ -41,7 +39,7 @@ browserWss.on('connection', (ws) => {
         instructions: INSTRUCTIONS,
         greeting: GREETING,
         audioFormat: { type: 'audio/pcm', rate: 24000 },
-        tools: [updateCallStateTool, checkAvailabilityTool],
+        tools: TEST_TOOLS,
         debug: DEBUG,
     });
 });

@@ -41,6 +41,14 @@ export interface AgentSessionEvents {
     onClose: () => void;
 }
 
+function safeJson(raw: string): unknown {
+    try {
+        return raw ? JSON.parse(raw) : {};
+    } catch {
+        return { unparsed: raw };
+    }
+}
+
 export class AgentSession {
     private readonly ws: WebSocket;
     private readonly opts: AgentSessionOptions;
@@ -98,20 +106,23 @@ export class AgentSession {
         this.send({
             type: 'response.create',
             response: {
-                instructions: `Say exactly this, verbatim, in a warm natural tone, and nothing else: "${greeting}"`,
+                instructions: `${this.opts.instructions}\n\nSay exactly this, verbatim, in a warm natural tone, and nothing else: "${greeting}"`,
             },
         });
     }
 
     // ── Tool execution ──
     //
-    // Every tool call ends with a function_call_output and then a response.create
-    // whose instructions depend on the outcome (see followUpInstructions):
-    //   silent tool, success            → continue, say nothing about it
-    //   report tool, success            → acknowledge briefly, share the result
-    //   failure, retries left           → tell the caller you need a moment, call again
-    //   success after a failure         → say it's sorted, move on
-    //   failure, retries exhausted      → apologize, continue without that detail
+    // Tool calls are picked up from response.done (never mid-response), so the
+    // follow-up response.create below can never collide with an active response.
+    // The session prompt is set once and never overridden: follow-ups are bare
+    // response.create calls, and the model learns the outcome from a `status`
+    // field on every tool result (ok | error | recovered | gave_up). What to say
+    // in each case is a static rule in the session prompt.
+    //
+    // A failure with retries left takes two responses: first speech only
+    // (tools disabled, "need a moment"), then one that forces the corrected
+    // call. A single response cannot be trusted to both speak and call a tool.
     //
     // Invalid arguments can only be fixed by the model, so they go straight back.
     // Execution failures (handler threw) are retried server-side first; the model
@@ -124,29 +135,36 @@ export class AgentSession {
 
     /** Consecutive failed attempts per tool name, cleared on success. */
     private readonly failedAttempts = new Map<string, number>();
+    /** Tool to force on the next response, after the "need a moment" speech finishes. */
+    private pendingRetry: string | null = null;
 
     private async runTool(name: string, callId: string, rawArgs: string): Promise<void> {
         const tool = (this.opts.tools || []).find((t) => t.name === name);
-        let args: unknown = {};
-        let result: unknown;
+        // For the trace: what the model sent, even if it fails to parse.
+        let args: unknown = safeJson(rawArgs);
+        let outcome: unknown;
 
         if (!tool) {
-            result = { error: 'unknown_tool', message: `no tool named ${name}` } satisfies ToolError;
+            outcome = { error: 'unknown_tool', message: `no tool named ${name}` } satisfies ToolError;
         } else {
             const parsed = parseToolArgs(tool, rawArgs);
             if (!parsed.ok) {
-                result = parsed.error;
+                outcome = parsed.error;
             } else {
                 args = parsed.args;
-                result = await this.executeWithRetry(tool, parsed.args);
+                outcome = await this.executeWithRetry(tool, parsed.args);
             }
         }
 
-        const failed = isToolError(result);
+        const failed = isToolError(outcome);
         const priorFailures = this.failedAttempts.get(name) ?? 0;
         const attempts = failed ? priorFailures + 1 : priorFailures;
         if (failed) this.failedAttempts.set(name, attempts);
         else this.failedAttempts.delete(name);
+
+        const willRetry = failed && attempts < AgentSession.MODEL_RETRY_LIMIT;
+        const status = failed ? (willRetry ? 'error' : 'gave_up') : priorFailures > 0 ? 'recovered' : 'ok';
+        const result = { status, ...(outcome as object) };
 
         this.events.onToolCall({ name, args, result });
         this.send({
@@ -158,18 +176,23 @@ export class AgentSession {
             },
         });
 
-        const instructions = this.followUpInstructions({
-            mode: tool?.mode ?? 'silent',
-            failed,
-            attempts,
-            recovered: !failed && priorFailures > 0,
-        });
+        if (willRetry) {
+            // Speech only now; the forced retry goes out when this response is done.
+            this.pendingRetry = name;
+            this.send({ type: 'response.create', response: { tool_choice: 'none' } });
+            return;
+        }
+
         // Report tools get a guaranteed beat before the agent speaks the result:
         // fast tools otherwise make "let me check" and the answer collide.
         const pause = tool?.mode === 'report' && !failed ? AgentSession.POST_TOOL_PAUSE_MS : 0;
-        setTimeout(() => {
-            this.send({ type: 'response.create', response: { instructions } });
-        }, pause);
+        setTimeout(() => this.send({ type: 'response.create' }), pause);
+    }
+
+    private sendForcedRetry(_name: string): void {
+        // Pinning a specific function makes the Realtime API emit the arguments as
+        // plain text instead of a function_call item; 'required' is the usable form.
+        this.send({ type: 'response.create', response: { tool_choice: 'required' } });
     }
 
     private async executeWithRetry(tool: AgentTool<any>, args: unknown): Promise<unknown> {
@@ -187,37 +210,6 @@ export class AgentSession {
         }
         return { error: 'tool_execution_failed', message: lastError } satisfies ToolError;
     }
-
-    private followUpInstructions(o: {
-        mode: 'silent' | 'report';
-        failed: boolean;
-        attempts: number;
-        recovered: boolean;
-    }): string {
-        if (o.failed && o.attempts < AgentSession.MODEL_RETRY_LIMIT) {
-            return 'The tool call failed; the result explains why. Briefly tell the caller you '
-                + 'need a moment because of a small technical problem on your side, in the language '
-                + 'you have been speaking. Then call the same tool again with corrected arguments. '
-                + 'Do not ask the caller to repeat anything they already said.';
-        }
-        if (o.failed) {
-            return 'The tool call failed again. Apologize briefly, say you will make a note of it '
-                + 'for the front desk, and continue the conversation without that detail. Do not retry.';
-        }
-        if (o.recovered) {
-            return 'The retry worked. Tell the caller briefly that it is sorted now, then continue '
-                + 'with the next question. Do not explain what went wrong.';
-        }
-        if (o.mode === 'silent') {
-            return 'Continue the conversation naturally from where it was. Do not mention that you '
-                + 'saved, noted, or recorded anything. If facts are still missing, ask for the next one.';
-        }
-        return 'Open with a brief natural acknowledgment that you checked, like '
-            + '"Okay, found it" or "Alright, here is what I see" (vary it, do not '
-            + 'repeat the same phrase every time), then share the result. Keep it '
-            + 'short and spoken-style; when listing times, offer at most 2-3 options.';
-    }
-
 
     private configure(): void {
         const format = this.opts.audioFormat || { type: 'audio/pcm', rate: 24000 };
@@ -287,14 +279,33 @@ export class AgentSession {
                 this.events.onInterrupt();
                 break;
 
-            case 'response.function_call_arguments.done':
-                void this.runTool(event.name, event.call_id, event.arguments);
-                break;
-
             case 'response.done': {
+                if (this.opts.debug) {
+                    const r = event.response ?? {};
+                    console.log('[response.done]', JSON.stringify({
+                        status: r.status,
+                        status_details: r.status_details,
+                        output: (r.output ?? []).map((o: any) => ({
+                            type: o.type, name: o.name, role: o.role, status: o.status,
+                            content: (o.content ?? []).map((c: any) => ({ type: c.type, transcript: c.transcript, text: c.text })),
+                        })),
+                    }));
+                }
                 const usage = event.response?.usage;
                 if (usage) this.events.onStats(this.stats.addTurn(usage));
                 this.events.onTurnDone();
+
+                const calls = (event.response?.output ?? []).filter(
+                    (item: any) => item.type === 'function_call',
+                );
+                if (calls.length > 0) {
+                    for (const call of calls) void this.runTool(call.name, call.call_id, call.arguments);
+                } else if (this.pendingRetry) {
+                    // The "need a moment" speech just finished; now force the corrected call.
+                    const name = this.pendingRetry;
+                    this.pendingRetry = null;
+                    this.sendForcedRetry(name);
+                }
                 break;
             }
 

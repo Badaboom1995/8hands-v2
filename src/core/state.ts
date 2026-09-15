@@ -9,12 +9,12 @@ export const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 export const CallStatePatch = z.object({
     intent: z.enum(['book', 'question', 'reschedule', 'cancel', 'other']).optional()
         .describe('Why the caller is calling, once it is clear.'),
-    service: z.string().min(1).optional()
-        .describe('Service the caller wants, as they said it (e.g. "gel manicure").'),
+    service: z.enum(['gel', 'polish', 'manicure', 'pedicure']).optional()
+        .describe('Service the caller wants.'),
     staff: z.string().min(1).optional()
         .describe('Specific staff member the caller asked for, if any.'),
-    location: z.string().min(1).optional()
-        .describe('Location the caller wants, if the business has more than one.'),
+    location: z.enum(['pacific_ave', 'union_st']).optional()
+        .describe('Which studio the caller wants.'),
     date: z.string().regex(ISO_DATE, 'Use YYYY-MM-DD.').optional()
         .describe('Preferred date, format YYYY-MM-DD. Resolve "tomorrow" etc. before saving.'),
     timeOfDay: z.enum(['morning', 'afternoon', 'evening']).optional()
@@ -31,9 +31,9 @@ export type CallStatePatch = z.infer<typeof CallStatePatch>;
 
 export interface CallState {
     intent?: CallStatePatch['intent'];
-    service?: string;
+    service?: CallStatePatch['service'];
     staff?: string;
-    location?: string;
+    location?: CallStatePatch['location'];
     date?: string;
     timeOfDay?: CallStatePatch['timeOfDay'];
     customerName?: string;
@@ -71,8 +71,10 @@ export function describeState(state: CallState): { confirmed: Record<string, unk
     if (notes.length > 0) confirmed.notes = notes;
 
     const missing: string[] = [];
-    if (state.intent === 'book' || state.intent === 'reschedule') {
-        for (const key of ['service', 'date', 'customerName', 'customerPhone'] as const) {
+    const booking = state.intent === 'book' || state.intent === 'reschedule'
+        || state.service !== undefined || state.location !== undefined || state.date !== undefined;
+    if (booking) {
+        for (const key of ['service', 'location', 'date', 'customerName', 'customerPhone'] as const) {
             if (state[key] === undefined) missing.push(key);
         }
     }

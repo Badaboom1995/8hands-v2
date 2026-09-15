@@ -15,8 +15,11 @@ export interface ToolContext {
 export interface AgentTool<TArgs = unknown> {
     name: string;
     description: string;
-    /** Argument schema. Source of truth for both the model and the handler. */
+    /** Argument schema. Source of truth for validation and the handler's types. */
     args: z.ZodType<TArgs>;
+    /** Optional schema shown to the model instead of `args` (e.g. to hide or
+     *  reshape values). Validation always uses `args`. */
+    exposedArgs?: z.ZodType;
     /**
      * silent: the model continues the conversation without mentioning the call.
      * report: the model acknowledges it checked and shares the result.
@@ -42,6 +45,7 @@ export interface ToolError {
     message: string;
     /** Per-field problems for invalid_arguments, so the model can correct itself. */
     issues?: { path: string; message: string }[];
+    hint?: string;
 }
 
 export function isToolError(value: unknown): value is ToolError {
@@ -67,13 +71,15 @@ export function parseToolArgs<TArgs>(tool: AgentTool<TArgs>, rawArgs: string): P
             error: 'invalid_arguments',
             message: `arguments for ${tool.name} failed validation`,
             issues: result.error.issues.map((i) => ({ path: i.path.join('.'), message: i.message })),
+            hint: 'Call again using exactly the values expected in issues. They override anything '
+                + 'else you were told about this field.',
         },
     };
 }
 
 /** Shape the Realtime API expects in session.update → tools. */
 export function toRealtimeTool(tool: AgentTool<any>): Record<string, unknown> {
-    const { $schema: _, ...parameters } = z.toJSONSchema(tool.args, { target: 'draft-7' });
+    const { $schema: _, ...parameters } = z.toJSONSchema(tool.exposedArgs ?? tool.args, { target: 'draft-7' });
     return {
         type: 'function',
         name: tool.name,

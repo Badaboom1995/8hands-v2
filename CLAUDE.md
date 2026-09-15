@@ -113,9 +113,16 @@ Under `/Users/alexey/projects/8Hands/`:
 In this repo:
 
 - `src/` — the v2 agent. Layout:
-  - `core/session.ts` — one OpenAI Realtime connection per call; runs tools, owns
-    `CallState`, decides the follow-up instructions after every tool call (silent /
-    report / retry / recovered / gave up).
+  - `core/session.ts` — one OpenAI Realtime connection per call; runs tools from
+    `response.done`, owns `CallState`, stamps every tool result with
+    `status: ok | error | recovered | gave_up`, then sends a bare `response.create`.
+    On `error` it sends a speech-only response, then one with `tool_choice: required`.
+  - The session prompt is set once. Never send `instructions` on `response.create`
+    (it replaces the prompt for that response). Only the greeting does, with the
+    prompt prepended. What to say per `status` is a rule in the prompt.
+  - `instructions-test-retry.ts` — test prompt with deliberately wrong enum values
+    plus an `exposedArgs` schema, to exercise the retry path. `server.ts` currently
+    uses it; switch back to `instructions.ts` for normal runs.
   - `core/state.ts` — `CallState`, the server-owned record of what the caller has
     established, plus the Zod patch schema the model must satisfy to change it.
   - `core/tools.ts` — `defineTool` with a Zod args schema and `mode: 'silent' | 'report'`.
