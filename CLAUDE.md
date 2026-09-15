@@ -112,23 +112,29 @@ Under `/Users/alexey/projects/8Hands/`:
 
 In this repo:
 
-- `agent-v2/` — a ~650-line late-v1 prototype moved here from the old repo (session /
-  transport / codec / tools split, per-call cost stats, browser test page). It imports
-  `ws` and expects `OPENAI_API_KEY`; run with `npx tsx agent-v2/server.ts` once deps
-  exist. Starting material, not the final architecture.
+- `src/` — the ~650-line late-v1 voice prototype, now the foundation of v2 (session /
+  transport / codec / tools split, per-call cost stats, browser test page at `/`).
+  Starting material; grow it, don't treat it as final.
 
 ---
 
 ## 5. v2 stack and conventions
 
-_To be recorded as decisions are made._
+- Runtime: **Bun** (no Node, no tsx). TypeScript, ESM, strict.
+- Voice: OpenAI Realtime API over WebSocket (`ws`); Twilio media streams next.
+- Everything else (DB, hosting, queue, eval harness): decide and write here.
 
-- TypeScript.
-- Voice: OpenAI Realtime API over WebSocket; Twilio media streams.
-- Everything else (framework, DB, hosting, queue, eval harness): decide and write here.
+```bash
+bun install
+bun run dev          # bun --watch src/server.ts → http://localhost:3100
+bun run typecheck    # tsc --noEmit
+```
 
-Once code exists:
-- `tsc --noEmit` clean before commit.
+Env vars: `OPENAI_API_KEY` (required), `OPENAI_REALTIME_MODEL` (default `gpt-realtime`),
+`AGENT_V2_PORT` (default 3100), `AGENT_V2_DEBUG`.
+
+Conventions:
+- `bun run typecheck` clean before commit.
 - Contract evals for language, payment, escalation, and booking gates, run per business
   config.
 - No tracked `.env`; list required env vars here as they appear.
