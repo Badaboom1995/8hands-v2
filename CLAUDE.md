@@ -115,7 +115,9 @@ In this repo:
 - `src/` — the v2 agent. Layout:
   - `core/session.ts` — one OpenAI Realtime connection per call; runs tools from
     `response.done`, owns `CallState`, stamps every tool result with
-    `status: ok | error | recovered | gave_up`, then sends a bare `response.create`.
+    `status: ok | blocked | error | recovered | gave_up`, then sends a bare `response.create`.
+    A handler returns `{ blocked, message }` when a precondition (e.g. location) is
+    not in state yet; the model asks for it instead of retrying.
     On `error` it sends a speech-only response, then one with `tool_choice: required`.
   - The session prompt is set once. Never send `instructions` on `response.create`
     (it replaces the prompt for that response). Only the greeting does, with the
@@ -128,7 +130,8 @@ In this repo:
   - `core/tools.ts` — `defineTool` with a Zod args schema and `mode: 'silent' | 'report'`.
   - `core/transport.ts`, `codecs/` — one call lifecycle, per-client wire dialects.
   - `tools/` — `update_call_state` (silent; the only way facts enter state) and
-    `check_availability` (report; in-memory stub schedule).
+    `check_availability` (report; reads the studio from state).
+  - `schedule/` — in-memory stub schedules, one file per studio with its own hours.
 
 ---
 

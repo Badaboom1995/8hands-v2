@@ -117,7 +117,7 @@ export class AgentSession {
     // follow-up response.create below can never collide with an active response.
     // The session prompt is set once and never overridden: follow-ups are bare
     // response.create calls, and the model learns the outcome from a `status`
-    // field on every tool result (ok | error | recovered | gave_up). What to say
+    // field on every tool result (ok | blocked | error | recovered | gave_up). What to say
     // in each case is a static rule in the session prompt.
     //
     // A failure with retries left takes two responses: first speech only
@@ -163,7 +163,9 @@ export class AgentSession {
         else this.failedAttempts.delete(name);
 
         const willRetry = failed && attempts < AgentSession.MODEL_RETRY_LIMIT;
-        const status = failed ? (willRetry ? 'error' : 'gave_up') : priorFailures > 0 ? 'recovered' : 'ok';
+        const blocked = !failed && typeof (outcome as { blocked?: unknown })?.blocked === 'string';
+        const status = failed ? (willRetry ? 'error' : 'gave_up')
+            : priorFailures > 0 ? 'recovered' : blocked ? 'blocked' : 'ok';
         const result = { status, ...(outcome as object) };
 
         this.events.onToolCall({ name, args, result });
