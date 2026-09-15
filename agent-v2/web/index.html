@@ -1,0 +1,210 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>agent-v2</title>
+<style>
+  body { font-family: -apple-system, sans-serif; max-width: 720px; margin: 0 auto; padding: 16px; background: #111; color: #eee; }
+  #log { border: 1px solid #333; border-radius: 8px; padding: 12px; height: 60vh; overflow-y: auto; }
+  .msg { margin: 8px 0; padding: 8px 12px; border-radius: 8px; white-space: pre-wrap; }
+  .user { background: #1d3a5f; }
+  .agent { background: #2a2a2a; }
+  .sys { color: #888; font-size: 12px; }
+  #bar { display: flex; gap: 8px; margin-top: 12px; }
+  #text { flex: 1; padding: 10px; border-radius: 8px; border: 1px solid #333; background: #1a1a1a; color: #eee; }
+  button { padding: 10px 16px; border-radius: 8px; border: none; background: #2d6cdf; color: white; cursor: pointer; }
+  button:disabled { background: #444; cursor: default; }
+  #call { background: #2da44e; }
+  #call.on { background: #d64545; }
+  #mic.on { background: #d64545; }
+</style>
+</head>
+<body>
+<h3>agent-v2 <span id="status" class="sys">idle</span></h3>
+<div id="stats" class="sys"></div>
+<div id="log"></div>
+<div id="bar">
+  <button id="call">📞 Call</button>
+  <input id="text" placeholder="Type a message…" autocomplete="off" disabled>
+  <button id="send" disabled>Send</button>
+  <button id="mic" disabled>🎙 Mic</button>
+</div>
+<script>
+const log = document.getElementById('log');
+const status = document.getElementById('status');
+const input = document.getElementById('text');
+const callBtn = document.getElementById('call');
+const sendBtn = document.getElementById('send');
+const micBtn = document.getElementById('mic');
+
+let ws = null;
+let agentBubble = null;
+
+function addMsg(cls, text) {
+  const div = document.createElement('div');
+  div.className = 'msg ' + cls;
+  div.textContent = text;
+  log.appendChild(div);
+  log.scrollTop = log.scrollHeight;
+  return div;
+}
+
+function setConnected(on) {
+  input.disabled = !on;
+  sendBtn.disabled = !on;
+  micBtn.disabled = !on;
+  callBtn.textContent = on ? '📵 Hang' : '📞 Call';
+  callBtn.classList.toggle('on', on);
+}
+
+// ── Audio playback (PCM16 24kHz from agent) ──
+const audioCtx = new AudioContext({ sampleRate: 24000 });
+let playHead = 0;
+let scheduled = [];
+
+function playChunk(base64) {
+  const bytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
+  const pcm = new Int16Array(bytes.buffer);
+  const f32 = new Float32Array(pcm.length);
+  for (let i = 0; i < pcm.length; i++) f32[i] = pcm[i] / 32768;
+  const buf = audioCtx.createBuffer(1, f32.length, 24000);
+  buf.getChannelData(0).set(f32);
+  const src = audioCtx.createBufferSource();
+  src.buffer = buf;
+  src.connect(audioCtx.destination);
+  const at = Math.max(playHead, audioCtx.currentTime + 0.05);
+  src.start(at);
+  playHead = at + buf.duration;
+  scheduled.push(src);
+  src.onended = () => { scheduled = scheduled.filter(s => s !== src); };
+}
+
+function stopPlayback() {
+  for (const src of scheduled) { try { src.stop(); } catch {} }
+  scheduled = [];
+  playHead = 0;
+}
+
+// ── Mic capture (PCM16 24kHz to agent) ──
+let micStream = null;
+let micNode = null;
+
+async function micOn() {
+  micStream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } });
+  await audioCtx.resume();
+  const source = audioCtx.createMediaStreamSource(micStream);
+  micNode = audioCtx.createScriptProcessor(4096, 1, 1);
+  micNode.onaudioprocess = (e) => {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    const f32 = e.inputBuffer.getChannelData(0);
+    const pcm = new Int16Array(f32.length);
+    for (let i = 0; i < f32.length; i++) pcm[i] = Math.max(-32768, Math.min(32767, Math.round(f32[i] * 32768)));
+    const bytes = new Uint8Array(pcm.buffer);
+    let bin = '';
+    for (let i = 0; i < bytes.length; i += 8192) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 8192));
+    ws.send(JSON.stringify({ type: 'audio', data: btoa(bin) }));
+  };
+  source.connect(micNode);
+  micNode.connect(audioCtx.destination); // required for onaudioprocess to fire; outputs silence
+  micBtn.classList.add('on');
+  micBtn.textContent = '⏹ Stop';
+}
+
+function micOff() {
+  if (micNode) { micNode.disconnect(); micNode = null; }
+  if (micStream) { micStream.getTracks().forEach(t => t.stop()); micStream = null; }
+  micBtn.classList.remove('on');
+  micBtn.textContent = '🎙 Mic';
+}
+
+micBtn.onclick = () => (micStream ? micOff() : micOn().catch(e => addMsg('sys', 'mic error: ' + e.message)));
+
+// ── Call / Hang ──
+function connect() {
+  status.textContent = 'connecting…';
+  callBtn.disabled = true;
+  ws = new WebSocket(`ws://${location.host}/ws`);
+  agentBubble = null;
+
+  ws.onopen = () => { callBtn.disabled = false; };
+
+  ws.onmessage = (e) => {
+    const msg = JSON.parse(e.data);
+    switch (msg.type) {
+      case 'ready':
+        status.textContent = 'on call (' + msg.model + ')';
+        setConnected(true);
+        document.getElementById('stats').textContent = '';
+        addMsg('sys', '— call started —');
+        micOn().catch(e => addMsg('sys', 'mic error: ' + e.message));
+        break;
+      case 'agent_text_delta':
+        if (!agentBubble) agentBubble = addMsg('agent', '');
+        agentBubble.textContent += msg.delta;
+        log.scrollTop = log.scrollHeight;
+        break;
+      case 'audio_delta':
+        playChunk(msg.data);
+        break;
+      case 'user_transcript': {
+        // Transcription is async and may arrive after the agent's reply
+        // started rendering — place the caller bubble before it.
+        const div = addMsg('user', '🎙 ' + msg.text);
+        if (agentBubble) log.insertBefore(div, agentBubble);
+        break;
+      }
+      case 'interrupt':
+        stopPlayback();
+        agentBubble = null;
+        break;
+      case 'turn_done':
+        agentBubble = null;
+        break;
+      case 'tool_call':
+        addMsg('sys', `🔧 ${msg.name}(${JSON.stringify(msg.args)}) → ${JSON.stringify(msg.result)}`);
+        break;
+      case 'stats': {
+        const t = msg.turn, s = msg.total;
+        document.getElementById('stats').textContent =
+          `call: ${s.turns} turns · in ${s.input.toLocaleString()} (cache ${s.cachePct}%) · out ${s.output.toLocaleString()} · $${s.cost.toFixed(4)}`;
+        addMsg('sys', `turn: in ${t.input.toLocaleString()} (cached ${t.cached.toLocaleString()}, ${t.cachePct}%) · out ${t.output.toLocaleString()} · $${t.cost.toFixed(4)}`);
+        break;
+      }
+      case 'error':
+        addMsg('sys', 'error: ' + msg.message);
+        break;
+    }
+  };
+
+  ws.onclose = () => {
+    ws = null;
+    micOff();
+    stopPlayback();
+    setConnected(false);
+    callBtn.disabled = false;
+    status.textContent = 'idle';
+    addMsg('sys', '— call ended —');
+  };
+}
+
+function hangup() {
+  if (ws) ws.close();
+}
+
+callBtn.onclick = () => (ws ? hangup() : connect());
+
+// ── Text input ──
+function sendText() {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  const text = input.value.trim();
+  if (!text) return;
+  input.value = '';
+  addMsg('user', text);
+  agentBubble = null;
+  ws.send(JSON.stringify({ type: 'text', text }));
+}
+sendBtn.onclick = sendText;
+input.addEventListener('keydown', (e) => { if (e.key === 'Enter') sendText(); });
+</script>
+</body>
+</html>
