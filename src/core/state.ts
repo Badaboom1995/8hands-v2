@@ -9,20 +9,20 @@ export const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 export const CallStatePatch = z.object({
     intent: z.enum(['book', 'question', 'reschedule', 'cancel', 'other']).optional()
         .describe('Why the caller is calling, once it is clear.'),
-    service: z.enum(['gel', 'polish', 'manicure', 'pedicure']).optional()
-        .describe('Service the caller wants.'),
-    staff: z.string().min(1).optional()
-        .describe('Specific staff member the caller asked for, if any.'),
+    service: z.enum(['manicure']).optional()
+        .describe('Service the caller wants. Only manicure is offered for now.'),
+    manicureType: z.enum(['gel', 'polish', 'cuticle_only']).optional()
+        .describe('Kind of manicure: gel, regular polish, or cuticle work only (no color).'),
     location: z.enum(['pacific_ave', 'union_st']).optional()
         .describe('Which studio the caller wants.'),
     date: z.string().regex(ISO_DATE, 'Use YYYY-MM-DD.').optional()
         .describe('Preferred date, format YYYY-MM-DD. Resolve "tomorrow" etc. before saving.'),
-    timeOfDay: z.enum(['morning', 'afternoon', 'evening']).optional()
-        .describe('Preferred part of the day, if the caller expressed one.'),
+    time: z.string().regex(/^\d{1,2} (AM|PM)$/, 'Use a time exactly as check_availability returned it, e.g. "2 PM".').optional()
+        .describe('The slot the caller chose, exactly as check_availability returned it, e.g. "2 PM".'),
     customerName: z.string().min(1).optional()
-        .describe("Caller's name."),
+        .describe("Caller's name, if given."),
     customerPhone: z.string().min(1).optional()
-        .describe("Caller's phone number, digits as spoken."),
+        .describe("Caller's phone number, if given."),
     notes: z.string().min(1).optional()
         .describe('Anything else relevant the caller said, in one short line.'),
 }).strict().refine((p) => Object.keys(p).length > 0, { message: 'Provide at least one field.' });
@@ -32,15 +32,18 @@ export type CallStatePatch = z.infer<typeof CallStatePatch>;
 export interface CallState {
     intent?: CallStatePatch['intent'];
     service?: CallStatePatch['service'];
-    staff?: string;
+    manicureType?: CallStatePatch['manicureType'];
     location?: CallStatePatch['location'];
     date?: string;
-    timeOfDay?: CallStatePatch['timeOfDay'];
+    time?: string;
     customerName?: string;
     customerPhone?: string;
     /** Appended, never overwritten. */
     notes: string[];
 }
+
+/** What a booking needs, in the order the receptionist asks for it. */
+const BOOKING_ORDER = ['service', 'manicureType', 'location', 'date', 'time'] as const;
 
 export function createCallState(): CallState {
     return { notes: [] };
@@ -72,9 +75,9 @@ export function describeState(state: CallState): { confirmed: Record<string, unk
 
     const missing: string[] = [];
     const booking = state.intent === 'book' || state.intent === 'reschedule'
-        || state.service !== undefined || state.location !== undefined || state.date !== undefined;
+        || BOOKING_ORDER.some((key) => state[key] !== undefined);
     if (booking) {
-        for (const key of ['service', 'location', 'date', 'customerName', 'customerPhone'] as const) {
+        for (const key of BOOKING_ORDER) {
             if (state[key] === undefined) missing.push(key);
         }
     }
