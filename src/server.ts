@@ -8,7 +8,9 @@ import path from 'node:path';
 import { WebSocketServer } from 'ws';
 
 import { browserCodec } from './codecs/browser';
-import { GREETING, INSTRUCTIONS, TEST_TOOLS } from './instructions-test-retry';
+import { GREETING, INSTRUCTIONS } from './instructions';
+import { checkAvailabilityTool } from './tools/availability';
+import { updateCallStateTool } from './tools/update-state';
 import { attachCall } from './core/transport';
 
 const API_KEY = process.env.OPENAI_API_KEY;
@@ -39,7 +41,7 @@ browserWss.on('connection', (ws) => {
         instructions: INSTRUCTIONS,
         greeting: GREETING,
         audioFormat: { type: 'audio/pcm', rate: 24000 },
-        tools: TEST_TOOLS,
+        tools: [updateCallStateTool, checkAvailabilityTool],
         debug: DEBUG,
     });
 });
