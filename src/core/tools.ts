@@ -5,14 +5,26 @@
 
 import { z } from 'zod';
 
+import type { CallState } from './state';
+
+/** What the handler can reach beyond its arguments. */
+export interface ToolContext {
+    state: CallState;
+}
+
 export interface AgentTool<TArgs = unknown> {
     name: string;
     description: string;
     /** Argument schema. Source of truth for both the model and the handler. */
     args: z.ZodType<TArgs>;
+    /**
+     * silent: the model continues the conversation without mentioning the call.
+     * report: the model acknowledges it checked and shares the result.
+     */
+    mode: 'silent' | 'report';
     /** Server-side implementation. Whatever it returns is JSON-serialized
      *  back to the model as the function result. */
-    handler: (args: TArgs) => Promise<unknown> | unknown;
+    handler: (args: TArgs, ctx: ToolContext) => Promise<unknown> | unknown;
 }
 
 export function defineTool<TArgs>(tool: AgentTool<TArgs>): AgentTool<TArgs> {
@@ -30,6 +42,10 @@ export interface ToolError {
     message: string;
     /** Per-field problems for invalid_arguments, so the model can correct itself. */
     issues?: { path: string; message: string }[];
+}
+
+export function isToolError(value: unknown): value is ToolError {
+    return typeof value === 'object' && value !== null && typeof (value as ToolError).error === 'string';
 }
 
 /** Parse + validate the raw JSON string the model sent as function arguments. */

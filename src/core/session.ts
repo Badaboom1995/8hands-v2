@@ -5,8 +5,9 @@
 
 import WebSocket from 'ws';
 
+import { createCallState, type CallState } from './state';
 import { CallStats, type CallTotals, type TurnStats } from './stats';
-import { parseToolArgs, toRealtimeTool, type AgentTool, type ToolError } from './tools';
+import { isToolError, parseToolArgs, toRealtimeTool, type AgentTool, type ToolError } from './tools';
 
 export interface AgentSessionOptions {
     apiKey: string;
@@ -45,6 +46,8 @@ export class AgentSession {
     private readonly opts: AgentSessionOptions;
     private readonly events: AgentSessionEvents;
     readonly stats: CallStats;
+    /** Server-owned record of what has been established on this call. */
+    readonly state: CallState = createCallState();
 
     private ready = false;
     private queued: string[] = [];
@@ -100,12 +103,33 @@ export class AgentSession {
         });
     }
 
-    // Execute a model-requested tool call: run the handler, return the
-    // result as a function_call_output item, then ask for a spoken follow-up.
+    // ── Tool execution ──
+    //
+    // Every tool call ends with a function_call_output and then a response.create
+    // whose instructions depend on the outcome (see followUpInstructions):
+    //   silent tool, success            → continue, say nothing about it
+    //   report tool, success            → acknowledge briefly, share the result
+    //   failure, retries left           → tell the caller you need a moment, call again
+    //   success after a failure         → say it's sorted, move on
+    //   failure, retries exhausted      → apologize, continue without that detail
+    //
+    // Invalid arguments can only be fixed by the model, so they go straight back.
+    // Execution failures (handler threw) are retried server-side first; the model
+    // only hears about them if all attempts fail.
+
+    private static readonly MODEL_RETRY_LIMIT = 2;       // attempts per tool before giving up
+    private static readonly EXEC_RETRY_ATTEMPTS = 3;     // server-side retries on handler throw
+    private static readonly EXEC_RETRY_BACKOFF_MS = 300;
+    private static readonly POST_TOOL_PAUSE_MS = 1000;
+
+    /** Consecutive failed attempts per tool name, cleared on success. */
+    private readonly failedAttempts = new Map<string, number>();
+
     private async runTool(name: string, callId: string, rawArgs: string): Promise<void> {
         const tool = (this.opts.tools || []).find((t) => t.name === name);
         let args: unknown = {};
         let result: unknown;
+
         if (!tool) {
             result = { error: 'unknown_tool', message: `no tool named ${name}` } satisfies ToolError;
         } else {
@@ -114,16 +138,16 @@ export class AgentSession {
                 result = parsed.error;
             } else {
                 args = parsed.args;
-                try {
-                    result = await tool.handler(parsed.args);
-                } catch (err) {
-                    result = {
-                        error: 'tool_execution_failed',
-                        message: (err as Error).message,
-                    } satisfies ToolError;
-                }
+                result = await this.executeWithRetry(tool, parsed.args);
             }
         }
+
+        const failed = isToolError(result);
+        const priorFailures = this.failedAttempts.get(name) ?? 0;
+        const attempts = failed ? priorFailures + 1 : priorFailures;
+        if (failed) this.failedAttempts.set(name, attempts);
+        else this.failedAttempts.delete(name);
+
         this.events.onToolCall({ name, args, result });
         this.send({
             type: 'conversation.item.create',
@@ -133,23 +157,67 @@ export class AgentSession {
                 output: JSON.stringify(result),
             },
         });
-        // Guaranteed beat before the agent speaks the result: fast tools
-        // otherwise make "let me check" and the answer collide unnaturally.
+
+        const instructions = this.followUpInstructions({
+            mode: tool?.mode ?? 'silent',
+            failed,
+            attempts,
+            recovered: !failed && priorFailures > 0,
+        });
+        // Report tools get a guaranteed beat before the agent speaks the result:
+        // fast tools otherwise make "let me check" and the answer collide.
+        const pause = tool?.mode === 'report' && !failed ? AgentSession.POST_TOOL_PAUSE_MS : 0;
         setTimeout(() => {
-            this.send({
-                type: 'response.create',
-                response: {
-                    instructions:
-                        'Open with a brief natural acknowledgment that you checked, like '
-                        + '"Okay, found it" or "Alright, here is what I see" (vary it, do not '
-                        + 'repeat the same phrase every time), then share the result. Keep it '
-                        + 'short and spoken-style; when listing times, offer at most 2-3 options.',
-                },
-            });
-        }, AgentSession.POST_TOOL_PAUSE_MS);
+            this.send({ type: 'response.create', response: { instructions } });
+        }, pause);
     }
 
-    private static readonly POST_TOOL_PAUSE_MS = 1000;
+    private async executeWithRetry(tool: AgentTool<any>, args: unknown): Promise<unknown> {
+        let lastError = '';
+        for (let attempt = 1; attempt <= AgentSession.EXEC_RETRY_ATTEMPTS; attempt++) {
+            try {
+                return await tool.handler(args, { state: this.state });
+            } catch (err) {
+                lastError = (err as Error).message;
+                if (this.opts.debug) console.log(`[tool ${tool.name}] attempt ${attempt} failed: ${lastError}`);
+                if (attempt < AgentSession.EXEC_RETRY_ATTEMPTS) {
+                    await new Promise((r) => setTimeout(r, AgentSession.EXEC_RETRY_BACKOFF_MS * attempt));
+                }
+            }
+        }
+        return { error: 'tool_execution_failed', message: lastError } satisfies ToolError;
+    }
+
+    private followUpInstructions(o: {
+        mode: 'silent' | 'report';
+        failed: boolean;
+        attempts: number;
+        recovered: boolean;
+    }): string {
+        if (o.failed && o.attempts < AgentSession.MODEL_RETRY_LIMIT) {
+            return 'The tool call failed; the result explains why. Briefly tell the caller you '
+                + 'need a moment because of a small technical problem on your side, in the language '
+                + 'you have been speaking. Then call the same tool again with corrected arguments. '
+                + 'Do not ask the caller to repeat anything they already said.';
+        }
+        if (o.failed) {
+            return 'The tool call failed again. Apologize briefly, say you will make a note of it '
+                + 'for the front desk, and continue the conversation without that detail. Do not retry.';
+        }
+        if (o.recovered) {
+            return 'The retry worked. Tell the caller briefly that it is sorted now, then continue '
+                + 'with the next question. Do not explain what went wrong.';
+        }
+        if (o.mode === 'silent') {
+            return 'Continue the conversation naturally from where it was. Do not mention that you '
+                + 'saved, noted, or recorded anything. If facts are still missing, ask for the next one.';
+        }
+        return 'Open with a brief natural acknowledgment that you checked, like '
+            + '"Okay, found it" or "Alright, here is what I see" (vary it, do not '
+            + 'repeat the same phrase every time), then share the result. Keep it '
+            + 'short and spoken-style; when listing times, offer at most 2-3 options.';
+    }
+
 
     private configure(): void {
         const format = this.opts.audioFormat || { type: 'audio/pcm', rate: 24000 };

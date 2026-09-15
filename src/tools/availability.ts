@@ -77,6 +77,7 @@ export const checkAvailabilityTool = defineTool({
         + 'range "day" = one day, "week" = 7 days, "month" = the next 30 days. '
         + 'Days the salon is closed are omitted; a day with empty freeSlots is fully booked. '
         + 'Use startDate for a specific day the caller asked about; omit it to start from today.',
+    mode: 'report',
     args: z.object({
         range: z.enum(['day', 'week', 'month']).describe('How much of the calendar to return.'),
         startDate: z.string().regex(ISO_DATE, 'Use YYYY-MM-DD.').optional()

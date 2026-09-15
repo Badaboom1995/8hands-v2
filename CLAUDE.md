@@ -112,9 +112,16 @@ Under `/Users/alexey/projects/8Hands/`:
 
 In this repo:
 
-- `src/` — the ~650-line late-v1 voice prototype, now the foundation of v2 (session /
-  transport / codec / tools split, per-call cost stats, browser test page at `/`).
-  Starting material; grow it, don't treat it as final.
+- `src/` — the v2 agent. Layout:
+  - `core/session.ts` — one OpenAI Realtime connection per call; runs tools, owns
+    `CallState`, decides the follow-up instructions after every tool call (silent /
+    report / retry / recovered / gave up).
+  - `core/state.ts` — `CallState`, the server-owned record of what the caller has
+    established, plus the Zod patch schema the model must satisfy to change it.
+  - `core/tools.ts` — `defineTool` with a Zod args schema and `mode: 'silent' | 'report'`.
+  - `core/transport.ts`, `codecs/` — one call lifecycle, per-client wire dialects.
+  - `tools/` — `update_call_state` (silent; the only way facts enter state) and
+    `check_availability` (report; in-memory stub schedule).
 
 ---
 
