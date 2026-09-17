@@ -151,8 +151,15 @@ bun run dev          # bun --watch src/server.ts → http://localhost:3100
 bun run typecheck    # tsc --noEmit
 ```
 
-Env vars: `OPENAI_API_KEY` (required), `OPENAI_REALTIME_MODEL` (default `gpt-realtime`),
-`AGENT_V2_PORT` (default 3100), `AGENT_V2_DEBUG`.
+Env vars live in a local `.env` (gitignored; Bun loads it automatically):
+`OPENAI_API_KEY` (required), `OPENAI_REALTIME_MODEL` (default `gpt-realtime`),
+`AGENT_V2_PORT` (default 3100), `AGENT_V2_DEBUG`, `SQUARE_ENVIRONMENT` (`sandbox`),
+`SQUARE_ACCESS_TOKEN`.
+
+Square sandbox (base `https://connect.squareupsandbox.com/v2`): a copy of the Zorina
+catalog. Locations `Pacific Avenue` = `LT9W3A6W3QJ35`, `Union Street` = `L6A2FZ9VR8WY3`
+(plus `Default Test Account`); 32 APPOINTMENTS_SERVICE items with tier variations
+(TOP Master / MASTER / JUNIOR), 26 team members, booking enabled, half-hourly alignment.
 
 Conventions:
 - `bun run typecheck` clean before commit.
