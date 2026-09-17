@@ -144,6 +144,15 @@ In this repo:
   - `tools/` — `update_call_state` (silent; the only way facts enter state) and
     `check_availability` (report; reads the studio from state).
   - `schedule/` — in-memory stub schedules, one file per studio with its own hours.
+  - `square/client.ts` — minimal fetch-based Square REST client (customers, cards).
+  - `card/enrollment.ts` — card-on-file gate and enrollment sessions (in memory, 30 min,
+    hashed one-time token). `lookupCardOnFile(phone)` → none | one{hasCard} | ambiguous.
+    `startEnrollment` sends the link (Resend if `RESEND_API_KEY`+`EMAIL_FROM`, else logs it);
+    `completeEnrollment` creates/updates the Square customer and stores the card.
+  - `web/card-on-file.html` — public page at `/card-on-file#<token>`, ported from v1:
+    Square Web Payments card form, name/email/consent, policy text. Routes:
+    `POST /api/card-enrollment/session|complete`, dev helper `POST /api/card-enrollment/start`.
+    Sandbox test card token for end-to-end tests: `cnon:card-nonce-ok`.
 
 ---
 
@@ -162,7 +171,9 @@ bun run typecheck    # tsc --noEmit
 Env vars live in a local `.env` (gitignored; Bun loads it automatically):
 `OPENAI_API_KEY` (required), `OPENAI_REALTIME_MODEL` (default `gpt-realtime`),
 `AGENT_V2_PORT` (default 3100), `AGENT_V2_DEBUG`, `SQUARE_ENVIRONMENT` (`sandbox`),
-`SQUARE_ACCESS_TOKEN`.
+`SQUARE_ACCESS_TOKEN`, `SQUARE_APPLICATION_ID` (Web Payments SDK), `SQUARE_LOCATION_ID`,
+`PUBLIC_BASE_URL` (link base for the card page), optional `RESEND_API_KEY` + `EMAIL_FROM`,
+`BUSINESS_NAME`.
 
 Square sandbox (base `https://connect.squareupsandbox.com/v2`): a copy of the Zorina
 catalog. Locations `Pacific Avenue` = `LT9W3A6W3QJ35`, `Union Street` = `L6A2FZ9VR8WY3`
