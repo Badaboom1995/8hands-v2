@@ -158,8 +158,12 @@ Env vars live in a local `.env` (gitignored; Bun loads it automatically):
 
 Square sandbox (base `https://connect.squareupsandbox.com/v2`): a copy of the Zorina
 catalog. Locations `Pacific Avenue` = `LT9W3A6W3QJ35`, `Union Street` = `L6A2FZ9VR8WY3`
-(plus `Default Test Account`); 32 APPOINTMENTS_SERVICE items with tier variations
-(TOP Master / MASTER / JUNIOR), 26 team members, booking enabled, half-hourly alignment.
+(plus `Default Test Account` = `LDJ8HE5NK6T1Z`); 32 APPOINTMENTS_SERVICE items with tier
+variations (TOP Master / MASTER / JUNIOR), 26 team members, half-hourly alignment.
+**Only `LDJ8HE5NK6T1Z` is subscribed to appointments**: availability search on the two
+named studios returns `Location not subscribed to appointments`. Availability at the
+default location works (Mon–Fri 9–17, 120-min segments, staff Ruth and Anastasia).
+Bookable team-member profiles: Sandbox Seller and Anastasia only.
 
 Conventions:
 - `bun run typecheck` clean before commit.
