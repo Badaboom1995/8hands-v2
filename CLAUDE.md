@@ -48,12 +48,20 @@ must work with no provider connected.
    whole list. Never invent slots.
 5. **Confirm and book** the exact slot the client chose: same service, staff, location,
    time. Read back one authoritative confirmation built from server state.
-6. **Optional sales layer** for businesses that have one: a discovery question, then two
+6. **Card-on-file gate** (business policy, Zorina requires it). Before any booking is
+   created, the server resolves the caller to exactly one Square customer (by phone;
+   several matches → human) and checks the Cards API for at least one enabled card.
+   No card → no booking. The agent explains the cancellation policy, asks for an email,
+   and the server sends a secure enrollment link (Square Web Payments page; the agent
+   never hears or stores card data). Booking resumes only after Square shows an active
+   card. The model never sees card ids or numbers. Availability checks may run before
+   the gate; CreateBooking may not.
+7. **Optional sales layer** for businesses that have one: a discovery question, then two
    offers, objection handling, then booking. Configured per business, absent by default.
-7. **Hand off** to a human anything the agent cannot do with certainty: unmapped
+8. **Hand off** to a human anything the agent cannot do with certainty: unmapped
    service, policy exception, refund, staff message, provider failure. Say honestly
    what will happen next. Never promise what the server or a human has not done.
-8. **Follow the business's policies and wording** (cancellation, deposits, prepayment,
+9. **Follow the business's policies and wording** (cancellation, deposits, prepayment,
    card-on-file, banned phrases, pronunciations) as configured, never hardcoded.
 
 ---
@@ -163,7 +171,9 @@ variations (TOP Master / MASTER / JUNIOR), 26 team members, half-hourly alignmen
 **Only `LDJ8HE5NK6T1Z` is subscribed to appointments**: availability search on the two
 named studios returns `Location not subscribed to appointments`. Availability at the
 default location works (Mon–Fri 9–17, 120-min segments, staff Ruth and Anastasia).
-Bookable team-member profiles: Sandbox Seller and Anastasia only.
+Staff with availability (Sept 2026): Pacific Ave = Irina, Carla; Union St = Ksenia, Esther,
+Gina, Elvira, Aruzhan, Anastasia. Customers: 2 test profiles (same phone, a duplicate on
+purpose), 0 cards on file.
 
 Conventions:
 - `bun run typecheck` clean before commit.
