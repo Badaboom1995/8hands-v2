@@ -107,7 +107,9 @@ Under `/Users/alexey/projects/8Hands/`:
 - `docs/zorina_front_desk_workflows.md` — the best description of how a good salon
   receptionist handles calls (Russian). Intent handling, qualification order, refill vs
   repair, named-staff lookup, handoff rules. Treat as the behavioral spec.
-  **Copied here as `docs-old/zorina_front_desk_workflows.md`.**
+  **Copied here as `docs-old/zorina_front_desk_workflows.md`; read
+  `docs-old/front-desk-summary.md` first (English, condensed: services and their
+  relations, call scenario, rules, edge cases).**
 - `dev-local/zorina-config.json` — the live v1 tenant record: policy text, FAQ, synced
   price list, forbidden phrases, and `salesPlaybookJson` with `bookingIntake` (services,
   facts, exact question wording) and `bookingProviderMapping` (facts → Square variation
