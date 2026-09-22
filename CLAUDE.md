@@ -107,6 +107,12 @@ Under `/Users/alexey/projects/8Hands/`:
 - `docs/zorina_front_desk_workflows.md` — the best description of how a good salon
   receptionist handles calls (Russian). Intent handling, qualification order, refill vs
   repair, named-staff lookup, handoff rules. Treat as the behavioral spec.
+  **Copied here as `docs-old/zorina_front_desk_workflows.md`.**
+- `dev-local/zorina-config.json` — the live v1 tenant record: policy text, FAQ, synced
+  price list, forbidden phrases, and `salesPlaybookJson` with `bookingIntake` (services,
+  facts, exact question wording) and `bookingProviderMapping` (facts → Square variation
+  ids, refill/free-fix history rules). **Copied here as `docs-old/zorina-config.json`.**
+  Note: it says Zorina offers Gel-X; the workflow doc says it does not. Ask Anastasia.
 - `docs/project_journal.md` — every real call failure found in v1 with root causes
   (skipped qualification, wrong slot bound, guessed service, silent location default,
   cross-area service changes, partial intake lost). Use as a test-case source.
