@@ -20,6 +20,8 @@ export interface AgentSessionOptions {
     /** Server functions the model may call. */
     tools?: AgentTool<any>[];
     voice?: string;
+    /** Caller ID from the phone line (Twilio `From`; a test field in the browser). */
+    callerPhone?: string;
     debug?: boolean;
 }
 
@@ -57,7 +59,7 @@ export class AgentSession {
     private readonly events: AgentSessionEvents;
     readonly stats: CallStats;
     /** Server-owned record of what has been established on this call. */
-    readonly state: CallState = createCallState();
+    readonly state: CallState;
 
     private ready = false;
     private queued: string[] = [];
@@ -65,6 +67,7 @@ export class AgentSession {
     constructor(opts: AgentSessionOptions, events: AgentSessionEvents) {
         this.opts = opts;
         this.events = events;
+        this.state = createCallState(opts.callerPhone);
         this.stats = new CallStats(opts.model);
 
         this.ws = new WebSocket(

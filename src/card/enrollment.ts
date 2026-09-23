@@ -9,7 +9,7 @@
 
 import crypto from 'node:crypto';
 
-import * as square from '../square/client';
+import * as square from '../integrations/square';
 
 const EXPIRY_MINUTES = 30;
 const MAX_COMPLETION_ATTEMPTS = 5;
@@ -71,10 +71,7 @@ export async function lookupCardOnFile(phoneRaw: string): Promise<CardLookup> {
     if (customers.length === 1) {
         return { kind: 'one', customerId: customers[0].id, hasCard: await square.hasEnabledCard(customers[0].id) };
     }
-    // Several profiles: if exactly one has a card, that one is the real customer.
-    const withCard: string[] = [];
-    for (const c of customers) if (await square.hasEnabledCard(c.id)) withCard.push(c.id);
-    if (withCard.length === 1) return { kind: 'one', customerId: withCard[0], hasCard: true };
+    // Several profiles: never pick one (not by card, visits, recency, or email). A human decides.
     return { kind: 'ambiguous', count: customers.length };
 }
 
@@ -151,9 +148,8 @@ export async function completeEnrollment(input: {
         const found = await square.searchCustomersByPhone(s.phone);
         if (found.length === 1) customerId = found[0].id;
         else if (found.length > 1) {
-            const byEmail = found.filter((c) => c.email_address?.toLowerCase() === email);
-            if (byEmail.length !== 1) throw new EnrollmentError('ambiguous_customer', 'Existing customer profiles could not be resolved safely', 409);
-            customerId = byEmail[0].id;
+            // Never pick between duplicate profiles; a human resolves them.
+            throw new EnrollmentError('ambiguous_customer', 'Existing customer profiles could not be resolved safely', 409);
         }
     }
     const fields = { givenName: name.givenName, familyName: name.familyName, email, phone: s.phone };

@@ -1,3 +1,5 @@
+\[be concise in responses\]
+
 # CLAUDE.md — 8Hands v2 (agent)
 
 This repo is a **from-scratch rebuild of the 8Hands agent only**. New architecture, no
@@ -152,7 +154,17 @@ In this repo:
   - `tools/` — `update_call_state` (silent; the only way facts enter state) and
     `check_availability` (report; reads the studio from state).
   - `schedule/` — in-memory stub schedules, one file per studio with its own hours.
-  - `square/client.ts` — minimal fetch-based Square REST client (customers, cards).
+  - `integrations/square.ts` — minimal fetch-based Square REST client (customers, cards,
+    locations, catalog services, bookable team, availability). All external API clients
+    live in `integrations/`.
+  - `tools/square/` — `square_services`, `square_masters`, `square_availability` (live
+    Square reads; names only, never ids) and `square_book`. `slots.ts` turns Square
+    availability into `Slot`s kept in `CallState.offeredSlots`; saving `time` binds the
+    pick to one of them (`bindSlot`) and returns a server-built `readBack`.
+    `square_book` takes no args and books only the slot whose read-back the caller last
+    heard (fingerprint), after phone → one customer with a card → live re-check.
+  - `tools/card-link.ts` — `send_card_link(email)`, starts card-on-file enrollment.
+  - Caller ID: `AgentSessionOptions.callerPhone`; the browser test UI sends it as `/ws?phone=`.
   - `card/enrollment.ts` — card-on-file gate and enrollment sessions (in memory, 30 min,
     hashed one-time token). `lookupCardOnFile(phone)` → none | one{hasCard} | ambiguous.
     `startEnrollment` sends the link (Resend if `RESEND_API_KEY`+`EMAIL_FROM`, else logs it);
@@ -181,7 +193,7 @@ Env vars live in a local `.env` (gitignored; Bun loads it automatically):
 `AGENT_V2_PORT` (default 3100), `AGENT_V2_DEBUG`, `SQUARE_ENVIRONMENT` (`sandbox`),
 `SQUARE_ACCESS_TOKEN`, `SQUARE_APPLICATION_ID` (Web Payments SDK), `SQUARE_LOCATION_ID`,
 `PUBLIC_BASE_URL` (link base for the card page), optional `RESEND_API_KEY` + `EMAIL_FROM`,
-`BUSINESS_NAME`.
+`BUSINESS_NAME`, `REQUIRE_CARD_ON_FILE` (default on; `false` disables the card gate).
 
 Square sandbox (base `https://connect.squareupsandbox.com/v2`): a copy of the Zorina
 catalog. Locations `Pacific Avenue` = `LT9W3A6W3QJ35`, `Union Street` = `L6A2FZ9VR8WY3`

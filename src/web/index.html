@@ -20,6 +20,7 @@
   .agent { background: #2a2a2a; }
   .sys { color: #888; font-size: 12px; }
   #bar { display: flex; gap: 8px; margin-top: 12px; }
+  #phone { width: 150px; padding: 10px; border-radius: 8px; border: 1px solid #333; background: #1a1a1a; color: #eee; }
   #text { flex: 1; padding: 10px; border-radius: 8px; border: 1px solid #333; background: #1a1a1a; color: #eee; }
   button { padding: 10px 16px; border-radius: 8px; border: none; background: #2d6cdf; color: white; cursor: pointer; }
   button:disabled { background: #444; cursor: default; }
@@ -36,6 +37,7 @@
   <div id="main">
     <div id="log"></div>
     <div id="bar">
+  <input id="phone" placeholder="Caller ID (phone)" autocomplete="off" title="Simulated caller ID, e.g. +14155550123">
   <button id="call">📞 Call</button>
   <input id="text" placeholder="Type a message…" autocomplete="off" disabled>
   <button id="send" disabled>Send</button>
@@ -55,14 +57,14 @@ let ws = null;
 let agentBubble = null;
 
 // Fields in the order the receptionist collects them.
-const STATE_FIELDS = ['intent', 'service', 'manicureType', 'location', 'date', 'time', 'customerName', 'customerPhone'];
+const STATE_FIELDS = ['intent', 'request', 'service', 'option', 'master', 'location', 'date', 'time', 'booking', 'customerName', 'customerPhone'];
 function renderState(state) {
   const dl = document.getElementById('state-fields');
   dl.innerHTML = '';
   for (const key of STATE_FIELDS) {
     const dt = document.createElement('dt'); dt.textContent = key;
     const dd = document.createElement('dd');
-    const v = state[key];
+    const v = key === 'booking' ? state.booking?.status : state[key];
     dd.textContent = v === undefined ? '—' : String(v);
     if (v === undefined) dd.className = 'missing';
     dl.append(dt, dd);
@@ -156,7 +158,8 @@ micBtn.onclick = () => (micStream ? micOff() : micOn().catch(e => addMsg('sys', 
 function connect() {
   status.textContent = 'connecting…';
   callBtn.disabled = true;
-  ws = new WebSocket(`ws://${location.host}/ws`);
+  const phone = document.getElementById('phone').value.trim();
+  ws = new WebSocket(`ws://${location.host}/ws${phone ? `?phone=${encodeURIComponent(phone)}` : ''}`);
   agentBubble = null;
 
   ws.onopen = () => { callBtn.disabled = false; };

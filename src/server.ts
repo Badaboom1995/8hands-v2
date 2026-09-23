@@ -10,7 +10,11 @@ import { WebSocketServer } from 'ws';
 import { completeEnrollment, EnrollmentError, getPublicSession, startEnrollment } from './card/enrollment';
 import { browserCodec } from './codecs/browser';
 import { GREETING, INSTRUCTIONS } from './instructions';
-import { checkAvailabilityTool } from './tools/availability';
+import { sendCardLinkTool } from './tools/card-link';
+import { squareAvailabilityTool } from './tools/square/availability';
+import { squareBookTool } from './tools/square/book';
+import { squareMastersTool } from './tools/square/masters';
+import { squareServicesTool } from './tools/square/services';
 import { updateCallStateTool } from './tools/update-state';
 import { attachCall } from './core/transport';
 
@@ -80,14 +84,17 @@ const server = http.createServer(async (req, res) => {
 });
 
 const browserWss = new WebSocketServer({ server, path: '/ws' });
-browserWss.on('connection', (ws) => {
+browserWss.on('connection', (ws, req) => {
+    // The browser test UI simulates caller ID with ?phone=.
+    const callerPhone = new URL(req.url ?? '/', 'http://localhost').searchParams.get('phone') || undefined;
     attachCall(ws, browserCodec(), {
         apiKey: API_KEY,
         model: MODEL,
         instructions: INSTRUCTIONS,
         greeting: GREETING,
         audioFormat: { type: 'audio/pcm', rate: 24000 },
-        tools: [updateCallStateTool, checkAvailabilityTool],
+        tools: [updateCallStateTool, squareServicesTool, squareMastersTool, squareAvailabilityTool, squareBookTool, sendCardLinkTool],
+        callerPhone,
         debug: DEBUG,
     });
 });
