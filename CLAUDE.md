@@ -185,14 +185,31 @@ Env vars live in a local `.env` (gitignored; Bun loads it automatically):
 
 Square sandbox (base `https://connect.squareupsandbox.com/v2`): a copy of the Zorina
 catalog. Locations `Pacific Avenue` = `LT9W3A6W3QJ35`, `Union Street` = `L6A2FZ9VR8WY3`
-(plus `Default Test Account` = `LDJ8HE5NK6T1Z`); 32 APPOINTMENTS_SERVICE items with tier
-variations (TOP Master / MASTER / JUNIOR), 26 team members, half-hourly alignment.
-**Only `LDJ8HE5NK6T1Z` is subscribed to appointments**: availability search on the two
-named studios returns `Location not subscribed to appointments`. Availability at the
-default location works (Mon–Fri 9–17, 120-min segments, staff Ruth and Anastasia).
-Staff with availability (Sept 2026): Pacific Ave = Irina, Carla; Union St = Ksenia, Esther,
-Gina, Elvira, Aruzhan, Anastasia. Customers: 2 test profiles (same phone, a duplicate on
-purpose), 0 cards on file.
+(plus `Default Test Account` = `LDJ8HE5NK6T1Z`, the merchant's main location). All three:
+Mon–Fri 09:00–17:00 `America/Los_Angeles`, booking enabled. Business booking profile:
+half-hourly alignment, no min lead time, max 1 year, any-staff and multi-service booking
+allowed. Checked 2026-09-23:
+- **Availability works at Pacific Ave and Union St** (e.g. Russian E-file Manicure,
+  Sep 28–Oct 1: 60 slots each). At `LDJ8HE5NK6T1Z` it returns 400 `Search did not find a
+  team member who performs the selected service variation`.
+- Catalog: 32 `APPOINTMENTS_SERVICE` items, no categories, descriptions, modifiers, or
+  taxes. Variation names mix tier (TOP Master / MASTER / JUNIOR), polish (GEL / REGULAR),
+  named staff (`TOP Ksenia`, `MASTER Gina`), and length (`Long Extensions with TOP Master`);
+  some tiers are split across same-named items. Duration differs per staff variation.
+  Packages are priced $0. `service_duration` is in ms; price in cents.
+- Team: 30 members = 26 active studio staff (surname literally "Zorina Studio"; speak
+  `given_name` only), 3 inactive, owner "Sandbox Seller". 17 have booking profiles.
+  Who performs a service comes from the variation's `team_member_ids`. Staff seen in
+  availability do not always match `assigned_locations` (e.g. Bika appears at Pacific Ave,
+  Esther and Anastasia at Union St); trust availability, not assignments.
+  Staff with slots for the manicure above: Pacific Ave = Carla, Bika, Irina, Anna;
+  Union St = Ksenia, Gina, Aruzhan, Elvira, Anastasia, Esther.
+- Availability search without a staff filter returns one staff member per start time,
+  not every free staff member. Results are UTC; `service_variation_version` must be
+  passed back on CreateBooking. Availability and list-bookings ranges cap at 31 days.
+- Customers (4): Aleksei Belov `+14155550123` (VISA on file), Maya Test `+14155550199`
+  (VISA on file), and "E2E Test Client" ×2 on `+14155550188` (a duplicate on purpose,
+  no cards). No bookings in Sept 2026.
 
 Conventions:
 - `bun run typecheck` clean before commit.
