@@ -143,9 +143,12 @@ In this repo:
     One-off directions (greeting, filler) are a system message item (`direct()`) appended to the
     conversation, then a bare `response.create`. What to say per `status` is a rule in
     the prompt.
-  - `instructions-test-retry.ts` — test prompt with deliberately wrong enum values
-    plus an `exposedArgs` schema, to exercise the retry path. `server.ts` currently
-    uses it; switch back to `instructions.ts` for normal runs.
+  - `instructions-v2.ts` — the prompt `server.ts` uses: a template (role, booking flow,
+    rules, tool calls, edge cases) built from the business profile. `instructions.ts`
+    is the previous prompt; `instructions-test-retry.ts` has deliberately wrong enum
+    values plus an `exposedArgs` schema, to exercise the retry path.
+  - `business.ts` — the business profile (names, greeting, exact questions, design
+    levels, card policy, level words in the catalog). Tenant data; moves to the DB.
   - `core/state.ts` — `CallState`, the server-owned record of what the caller has
     established, plus the Zod patch schema the model must satisfy to change it.
   - `core/tools.ts` — `defineTool` with a Zod args schema and `mode: 'silent' | 'report'`.

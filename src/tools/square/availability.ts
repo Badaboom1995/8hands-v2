@@ -6,7 +6,9 @@ import { z } from 'zod';
 import { defineTool } from '../../core/tools';
 import { ISO_DATE } from '../../core/state';
 import { listBookableTeam, listLocations, listServiceItems, type SquareLocation } from '../../integrations/square';
-import { dayLabel, groupServices, localDate, matchByName, minutes, optionName, price, spread, staffNames } from './shared';
+import {
+    dayLabel, groupServices, localDate, matchByName, minutes, normalize, optionName, price, spread, staffNames,
+} from './shared';
 import { findSlots } from './slots';
 const TIMES_PER_DAY = 6;
 const MAX_DAYS_SHOWN = 7;
@@ -26,7 +28,7 @@ export const squareAvailabilityTool = defineTool({
         option: z.string().min(1).optional()
             .describe('Option name exactly as square_services returned it. Required when the service has several.'),
         location: z.string().min(1).optional().describe('Studio the caller wants. Omit to search every studio.'),
-        master: z.string().min(1).optional().describe('Master the caller asked for. Omit for anyone.'),
+        master: z.string().min(1).optional().describe('Master the caller asked for. Omit, or "any", for anyone.'),
         startDate: z.string().regex(ISO_DATE, 'Use YYYY-MM-DD.').optional()
             .describe('First day to search, YYYY-MM-DD. Defaults to today.'),
         days: z.number().int().min(1).max(28).optional().describe('How many days to search, 1–28. Defaults to 1.'),
@@ -66,7 +68,7 @@ export const squareAvailabilityTool = defineTool({
 
         // Master → team member id, who must perform this option.
         let teamMemberIds: string[] | undefined;
-        if (args.master) {
+        if (args.master && normalize(args.master) !== 'any') {
             const found = matchByName(args.master, team, (m) => names.get(m.id)!);
             if (found.length !== 1) {
                 return {

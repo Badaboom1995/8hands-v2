@@ -190,6 +190,10 @@ export interface SquareTeamMember {
     id: string;
     given_name?: string;
     family_name?: string;
+    assigned_locations?: {
+        assignment_type?: 'ALL_CURRENT_AND_FUTURE_LOCATIONS' | 'EXPLICIT_LOCATIONS';
+        location_ids?: string[];
+    };
 }
 
 /** Active team members who have a bookable booking profile. */

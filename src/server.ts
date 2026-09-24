@@ -10,7 +10,7 @@ import { WebSocketServer } from 'ws';
 import { completeEnrollment, EnrollmentError, getPublicSession, startEnrollment } from './card/enrollment';
 import { startCallerLookup } from './card/identify';
 import { browserCodec } from './codecs/browser';
-import { GREETING, INSTRUCTIONS } from './instructions';
+import { GREETING_V2 as GREETING, INSTRUCTIONS_V2 as INSTRUCTIONS } from './instructions-v2';
 import { sendCardLinkTool } from './tools/card-link';
 import { squareAvailabilityTool } from './tools/square/availability';
 import { squareBookTool } from './tools/square/book';

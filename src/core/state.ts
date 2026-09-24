@@ -32,7 +32,8 @@ export const CallStatePatch = z.object({
     option: z.string().min(1).optional()
         .describe('Option of that service (master level, polish…), exactly as square_services named it.'),
     master: z.string().min(1).optional()
-        .describe('Master the caller asked for by name. When a time is picked, the server sets the master of that slot.'),
+        .describe('Master the caller asked for by name, or "any" if another master is okay. '
+            + 'When a time is picked, the server sets the master of that slot.'),
     location: z.string().min(1).optional()
         .describe('Studio the caller wants, as the caller named it, or "any" if either is fine. '
             + 'When a time is picked, the server sets the studio of that slot.'),
@@ -161,15 +162,18 @@ export function applyPatch(state: CallState, patch: Omit<CallStatePatch, 'time'>
             changed.push(key);
             continue;
         }
+        // "any" master means no preference: the field is simply unset.
+        const next = key === 'master' && normalize(value as string) === 'any' ? undefined : value;
         const current = (state as unknown as Record<string, unknown>)[key];
-        const same = typeof current === 'string' && typeof value === 'string'
-            && (key === 'location' || key === 'master' ? sameName(value, current) : value === current);
+        if (next === undefined && current === undefined) continue;
+        const same = typeof current === 'string' && typeof next === 'string'
+            && (key === 'location' || key === 'master' ? sameName(next, current) : next === current);
         if (same) continue;
         if (state.slot && (SLOT_INPUTS as readonly string[]).includes(key)) {
             dropSlot(state);
             changed.push('time');
         }
-        (state as unknown as Record<string, unknown>)[key] = value;
+        (state as unknown as Record<string, unknown>)[key] = next;
         changed.push(key);
     }
     return changed;
