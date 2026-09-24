@@ -148,7 +148,7 @@ function missingForBooking(s: CallState): string[] {
     need('extensionsType', s.area === 'extensions');
     need('extensionsLength', s.area === 'extensions' && s.extensionsType === 'new_set');
     need('location');
-    need('level', !s.master);
+    need('level'); // a named master with one level fills it in
     need('design', s.area === 'extensions' || s.finish === 'gel' || s.finish === 'regular');
     need('date');
     need('service');

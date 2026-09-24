@@ -5,9 +5,10 @@ import { z } from 'zod';
 
 import { defineTool } from '../../core/tools';
 import { ISO_DATE } from '../../core/state';
-import { listBookableTeam, listLocations, listServiceItems, type SquareLocation } from '../../integrations/square';
+import { listBookableTeam, listServiceItems, type SquareLocation } from '../../integrations/square';
 import {
-    dayLabel, groupServices, localDate, matchByName, minutes, normalize, optionName, price, spread, staffNames,
+    dayLabel, groupServices, listStudios, localDate, matchByName, minutes, normalize, optionName, price, spread,
+    staffNames,
 } from './shared';
 import { findSlots } from './slots';
 const TIMES_PER_DAY = 6;
@@ -36,7 +37,7 @@ export const squareAvailabilityTool = defineTool({
             .describe('Only times in this part of the day: morning before 12, afternoon 12–5, evening after 5.'),
     }),
     handler: async (args, ctx) => {
-        const [items, allLocations, team] = await Promise.all([listServiceItems(), listLocations(), listBookableTeam()]);
+        const [items, allLocations, team] = await Promise.all([listServiceItems(), listStudios(), listBookableTeam()]);
         const services = groupServices(items);
         const names = staffNames(team);
 

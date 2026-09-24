@@ -11,9 +11,9 @@ import { customerGate } from '../../card/identify';
 import { dropSlot, fingerprint, readBack, type CallState, type Slot } from '../../core/state';
 import { defineTool } from '../../core/tools';
 import {
-    createBooking, listBookableTeam, listLocations, listServiceItems, searchAvailability, SquareError,
+    createBooking, listBookableTeam, listServiceItems, searchAvailability, SquareError,
 } from '../../integrations/square';
-import { staffNames } from './shared';
+import { listStudios, staffNames } from './shared';
 import { findSlots } from './slots';
 
 interface SlotRef {
@@ -107,7 +107,7 @@ async function stillOpen(slot: Slot, ref: SlotRef): Promise<boolean> {
 async function slotTaken(state: CallState, slot: Slot, ref: SlotRef) {
     const masterWasAsked = !state.filledBySlot?.includes('master');
     const locationWasAsked = !state.filledBySlot?.includes('location');
-    const [items, locations, team] = await Promise.all([listServiceItems(), listLocations(), listBookableTeam()]);
+    const [items, locations, team] = await Promise.all([listServiceItems(), listStudios(), listBookableTeam()]);
     const variation = items.flatMap((i) => i.item_data?.variations ?? []).find((v) => v.id === ref.serviceVariationId);
     dropSlot(state);
     if (!variation) {

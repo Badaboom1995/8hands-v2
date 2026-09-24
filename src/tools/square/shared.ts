@@ -1,10 +1,21 @@
 // Helpers shared by the Square read tools: name matching, service grouping,
 // time zones, and turning Square values into things the agent can say.
 
+import { BUSINESS } from '../../business';
 import { normalize } from '../../core/names';
-import type { SquareServiceItem, SquareTeamMember, SquareVariation } from '../../integrations/square';
+import {
+    listLocations, type SquareLocation, type SquareServiceItem, type SquareTeamMember, type SquareVariation,
+} from '../../integrations/square';
 
 export { matchByName, normalize } from '../../core/names';
+
+// ---- Studios ----
+
+/** The Square locations this business books for (business profile), live. */
+export async function listStudios(): Promise<SquareLocation[]> {
+    const served = new Set(BUSINESS.studios.map(normalize));
+    return (await listLocations()).filter((l) => served.has(normalize(l.name)));
+}
 
 // ---- Services ----
 

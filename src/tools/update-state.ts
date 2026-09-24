@@ -4,6 +4,7 @@
 import { customerGate, identifyFromPatch } from '../card/identify';
 import { defineTool } from '../core/tools';
 import { applyPatch, bindSlot, CallStatePatch, describeState, freshReadBack, needsReadBack } from '../core/state';
+import { resolveNamedMaster } from './square/masters';
 
 export const updateCallStateTool = defineTool({
     name: 'update_call_state',
@@ -27,6 +28,18 @@ export const updateCallStateTool = defineTool({
             if (invalid) return { ...invalid, saved, ...describeState(state) };
         }
 
+        // A named master: the server finds them in Square; their studio and level become facts.
+        let masterInfo: object | undefined;
+        if (saved.includes('master') && state.master) {
+            const resolved = await resolveNamedMaster(state);
+            if ('blocked' in resolved) {
+                const kept = state.master ? saved : saved.filter((k) => k !== 'master');
+                return { ...resolved, saved: kept, ...describeState(state) };
+            }
+            masterInfo = resolved.masterInfo;
+            saved.push(...resolved.saved.filter((k) => !saved.includes(k)));
+        }
+
         if (time) {
             const bound = bindSlot(state, time);
             if ('blocked' in bound) return { ...bound, saved, ...describeState(state) };
@@ -39,6 +52,6 @@ export const updateCallStateTool = defineTool({
             if (!('ok' in gate)) return { ...gate, saved, ...describeState(state) };
             return { saved, ...describeState(state), readBack: freshReadBack(state) };
         }
-        return { saved, ...describeState(state) };
+        return { saved, ...describeState(state), ...(masterInfo ? { masterInfo } : {}) };
     },
 });

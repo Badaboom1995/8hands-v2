@@ -37,6 +37,8 @@ export interface BusinessProfile {
      * names, most specific first ("TOP MASTER" is Top, not Master).
      */
     levels: { name: string; words: string[] }[];
+    /** Provider locations the agent books for, by name. Others (e.g. a default test location) are ignored. */
+    studios: string[];
 }
 
 export const ZORINA: BusinessProfile = {
@@ -78,6 +80,7 @@ export const ZORINA: BusinessProfile = {
         { name: 'Junior', words: ['junior'] },
         { name: 'Master', words: ['master'] },
     ],
+    studios: ['Pacific Avenue', 'Union Street'],
 };
 
 /** The business this process serves. One tenant for now. */
