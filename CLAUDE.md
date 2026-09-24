@@ -137,19 +137,23 @@ In this repo:
     A handler returns `{ blocked, message }` when a precondition (e.g. location) is
     not in state yet; the model asks for it instead of retrying.
     On `error` it sends a speech-only response, then one with `tool_choice: required`.
-  - The session prompt is set once. Never send `instructions` on `response.create`
-    (it replaces the prompt for that response). Only the greeting does, with the
-    prompt prepended. What to say per `status` is a rule in the prompt.
+  - The session prompt is set once. Never send `instructions` on `response.create`:
+    it replaces the prompt for that response, and since the prompt starts the model's
+    context, everything after it (tools, conversation, audio) misses the prompt cache.
+    One-off directions (greeting, filler) are a system message item (`direct()`) appended to the
+    conversation, then a bare `response.create`. What to say per `status` is a rule in
+    the prompt.
   - `instructions-test-retry.ts` — test prompt with deliberately wrong enum values
     plus an `exposedArgs` schema, to exercise the retry path. `server.ts` currently
     uses it; switch back to `instructions.ts` for normal runs.
   - `core/state.ts` — `CallState`, the server-owned record of what the caller has
     established, plus the Zod patch schema the model must satisfy to change it.
-  - `core/tools.ts` — `defineTool` with a Zod args schema, `mode: 'silent' | 'report'`,
-    and optional `filler` ("checking the schedule"): the agent speaks one filler
-    sentence while the handler runs, and the result is spoken no sooner than
-    500 ms after the filler audio ends (audio length measured from streamed bytes).
-    Tool calls are synchronous by design; Realtime has no true background.
+  - `core/tools.ts` — `defineTool` with a Zod args schema and `mode: 'silent' | 'report'`.
+    The reply that calls a report tool says "let me check…" itself; the result is spoken
+    no sooner than 500 ms after that audio ends (audio length measured from streamed
+    bytes). Optional `filler` ("checking the schedule") makes the server have the model
+    say one extra sentence while the handler runs; no tool uses it today. Tool calls are
+    synchronous by design; Realtime has no true background.
   - `core/transport.ts`, `codecs/` — one call lifecycle, per-client wire dialects.
   - `tools/` — `update_call_state` (silent; the only way facts enter state) and
     `check_availability` (report; reads the studio from state).
@@ -189,7 +193,7 @@ bun run typecheck    # tsc --noEmit
 ```
 
 Env vars live in a local `.env` (gitignored; Bun loads it automatically):
-`OPENAI_API_KEY` (required), `OPENAI_REALTIME_MODEL` (default `gpt-realtime`),
+`OPENAI_API_KEY` (required), `OPENAI_REALTIME_MODEL` (default `gpt-realtime-2.1`),
 `AGENT_V2_PORT` (default 3100), `AGENT_V2_DEBUG`, `SQUARE_ENVIRONMENT` (`sandbox`),
 `SQUARE_ACCESS_TOKEN`, `SQUARE_APPLICATION_ID` (Web Payments SDK), `SQUARE_LOCATION_ID`,
 `PUBLIC_BASE_URL` (link base for the card page), optional `RESEND_API_KEY` + `EMAIL_FROM`,

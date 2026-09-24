@@ -57,14 +57,16 @@ let ws = null;
 let agentBubble = null;
 
 // Fields in the order the receptionist collects them.
-const STATE_FIELDS = ['intent', 'request', 'service', 'option', 'master', 'location', 'date', 'time', 'booking', 'customerName', 'customerPhone'];
+const STATE_FIELDS = ['intent', 'request', 'design', 'designDescription', 'service', 'option', 'master', 'location', 'date', 'time', 'client', 'booking', 'firstVisit', 'customerPhone', 'customerEmail'];
 function renderState(state) {
   const dl = document.getElementById('state-fields');
   dl.innerHTML = '';
   for (const key of STATE_FIELDS) {
     const dt = document.createElement('dt'); dt.textContent = key;
     const dd = document.createElement('dd');
-    const v = key === 'booking' ? state.booking?.status : state[key];
+    const v = key === 'booking' ? state.booking?.status
+      : key === 'client' ? (state.customer && `${state.customer.status}${state.customer.status === 'found' ? (state.customer.hasCard ? ', card' : ', no card') : ''} (${state.customer.via})`)
+      : state[key];
     dd.textContent = v === undefined ? '—' : String(v);
     if (v === undefined) dd.className = 'missing';
     dl.append(dt, dd);

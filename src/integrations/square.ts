@@ -56,6 +56,21 @@ export async function searchCustomersByPhone(phone: string): Promise<SquareCusto
     return out;
 }
 
+/** Every customer whose email matches exactly (Square compares case-insensitively). */
+export async function searchCustomersByEmail(email: string): Promise<SquareCustomer[]> {
+    const out: SquareCustomer[] = [];
+    let cursor: string | undefined;
+    do {
+        const r = await call<{ customers?: SquareCustomer[]; cursor?: string }>('POST', '/customers/search', {
+            ...(cursor ? { cursor } : {}),
+            query: { filter: { email_address: { exact: email } } },
+        });
+        out.push(...(r.customers ?? []));
+        cursor = r.cursor;
+    } while (cursor);
+    return out;
+}
+
 export async function createCustomer(input: {
     idempotencyKey: string; givenName: string; familyName: string; email: string; phone: string;
 }): Promise<SquareCustomer> {

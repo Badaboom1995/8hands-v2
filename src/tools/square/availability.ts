@@ -21,7 +21,6 @@ export const squareAvailabilityTool = defineTool({
         + 'Returns, per studio and day, a spread of open start times with the master for each; '
         + '"more" counts times not listed. Days with no open times are left out.',
     mode: 'report',
-    filler: 'checking the schedule',
     args: z.object({
         service: z.string().min(1).describe('Service name exactly as square_services returned it.'),
         option: z.string().min(1).optional()

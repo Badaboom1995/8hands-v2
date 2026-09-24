@@ -12,18 +12,18 @@ export const sendCardLinkTool = defineTool({
         'Email the caller a secure link to add a card on file, when square_book says a card is required. '
         + 'Call it after explaining the cancellation policy and getting their email.',
     mode: 'report',
-    filler: 'sending the link',
     args: z.object({
         email: z.string().min(3).describe('Caller\'s email, as they spelled it, e.g. "anna.lee@gmail.com".'),
     }).strict(),
     handler: async (args, ctx) => {
         const rawPhone = ctx.state.callerPhone ?? ctx.state.customerPhone;
+        const known = ctx.state.customer?.status === 'found' ? ctx.state.customer.customerId : undefined;
         if (!rawPhone) {
             return { blocked: 'phone', message: "Ask for the caller's phone number and save it as customerPhone first." };
         }
         let result;
         try {
-            result = await startEnrollment({ phone: normalizePhone(rawPhone), email: args.email });
+            result = await startEnrollment({ phone: normalizePhone(rawPhone), email: args.email, customerId: known });
         } catch (err) {
             if (err instanceof EnrollmentError && err.code === 'invalid_email') {
                 return { blocked: 'email', message: 'That email does not look valid. Ask the caller to spell it again.' };
@@ -43,7 +43,7 @@ export const sendCardLinkTool = defineTool({
         return {
             sent: true,
             expiresInMinutes: result.expiresInMinutes,
-            message: 'Tell the caller the link is on its way to their email. When they say the card is added, book again.',
+            message: 'Tell the caller the link is on its way to their email. When they say the card is added, call square_book.',
         };
     },
 });

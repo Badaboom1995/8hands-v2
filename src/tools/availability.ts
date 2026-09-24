@@ -17,7 +17,6 @@ export const checkAvailabilityTool = defineTool({
         + 'Days the studio is closed are omitted; a day with empty freeSlots is fully booked. '
         + 'Use startDate for a specific day the caller asked about; omit it to start from today.',
     mode: 'report',
-    filler: 'checking the schedule',
     args: z.object({
         range: z.enum(['day', 'week', 'month']).describe('How much of the calendar to return.'),
         startDate: z.string().regex(ISO_DATE, 'Use YYYY-MM-DD.').optional()

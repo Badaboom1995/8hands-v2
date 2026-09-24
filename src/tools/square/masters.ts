@@ -14,7 +14,6 @@ export const squareMastersTool = defineTool({
         + 'Without name: every master\'s name. '
         + 'Use the name exactly as returned when you call square_availability.',
     mode: 'report',
-    filler: 'checking our team',
     args: z.object({
         name: z.string().min(1).optional()
             .describe('Master name as the caller said it, in Latin letters (e.g. "Ksenia"). Omit to list everyone.'),

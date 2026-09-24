@@ -26,10 +26,10 @@ export interface AgentTool<TArgs = unknown> {
      */
     mode: 'silent' | 'report';
     /**
-     * If set, the agent speaks one short filler sentence before the tool runs,
+     * Opt-in: the agent speaks one short filler sentence while the handler runs,
      * e.g. "checking the schedule" → "One moment, let me check the schedule."
-     * The handler runs while the filler plays; the result is spoken at least
-     * FILLER_PAUSE_MS after the filler audio ends.
+     * The result is spoken at least SPEECH_GAP_MS after the filler audio ends.
+     * Unused today: the reply that calls the tool says "let me check…" itself.
      */
     filler?: string;
     /** Server-side implementation. Whatever it returns is JSON-serialized

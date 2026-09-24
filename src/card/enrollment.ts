@@ -77,12 +77,15 @@ export async function lookupCardOnFile(phoneRaw: string): Promise<CardLookup> {
 
 // ── Session lifecycle ──
 
-export async function startEnrollment(input: { phone: string; email: string }): Promise<
+/** `customerId`: the caller was already identified (e.g. by email); skip the phone lookup. */
+export async function startEnrollment(input: { phone: string; email: string; customerId?: string }): Promise<
     { started: true; url: string; expiresAt: string; expiresInMinutes: number } | { started: false; reason: 'already_has_card' | 'ambiguous' }
 > {
     const phone = normalizePhone(input.phone);
     const email = normalizeEmail(input.email);
-    const lookup = await lookupCardOnFile(phone);
+    const lookup: CardLookup = input.customerId
+        ? { kind: 'one', customerId: input.customerId, hasCard: await square.hasEnabledCard(input.customerId) }
+        : await lookupCardOnFile(phone);
     if (lookup.kind === 'ambiguous') return { started: false, reason: 'ambiguous' };
     if (lookup.kind === 'one' && lookup.hasCard) return { started: false, reason: 'already_has_card' };
 

@@ -15,7 +15,6 @@ export const squareServicesTool = defineTool({
         + '(master level, polish, length…), each with its own price and minutes. '
         + 'Use the service and option names exactly as returned when you call square_availability.',
     mode: 'report',
-    filler: 'checking our services',
     args: z.object({
         query: z.string().min(1).optional()
             .describe('What the caller asked about, in a few words, in English. Omit for the full list.'),

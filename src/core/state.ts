@@ -10,12 +10,23 @@ import { matchByName, normalize } from './names';
 
 export const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
+/** Design add-on levels, as the business defines them (moves to business config). */
+export const DESIGN_LEVELS = [
+    'none', 'simple', 'medium', 'hard', 'extra_hard', 'xxtra_hard', 'extra_per_nail', 'custom_request',
+] as const;
+
 export const CallStatePatch = z.object({
     intent: z.enum(['book', 'question', 'reschedule', 'cancel', 'other']).optional()
         .describe('Why the caller is calling, once it is clear.'),
     request: z.string().min(1).optional()
         .describe('What the caller wants, in plain words, with every service answer so far, '
-            + 'e.g. "manicure", then "gel manicure, Master level". Send the whole updated phrase.'),
+            + 'e.g. "manicure", then "gel manicure, Master level". Send the whole updated phrase. '
+            + 'Design goes in design/designDescription, not here.'),
+    design: z.enum(DESIGN_LEVELS).optional()
+        .describe('Nail design level. "none" if the caller wants no design or the service has no color; '
+            + '"custom_request" if the level stays unclear or depends on a photo.'),
+    designDescription: z.string().min(1).optional()
+        .describe('The design in the caller\'s own words, e.g. "French tip", "cat eye on two nails".'),
     service: z.string().min(1).optional()
         .describe('The matching catalog service, exactly as square_services named it. Only after looking it up.'),
     option: z.string().min(1).optional()
@@ -33,7 +44,11 @@ export const CallStatePatch = z.object({
     customerName: z.string().min(1).optional()
         .describe("Caller's name, if given."),
     customerPhone: z.string().min(1).optional()
-        .describe("Caller's phone number, only if the booking tool asked for it."),
+        .describe("A phone number the caller gave to find their profile, only when a tool asked for it."),
+    customerEmail: z.string().min(3).optional()
+        .describe('An email the caller gave to find their profile, spelled back and confirmed, only when a tool asked for it.'),
+    firstVisit: z.boolean().optional()
+        .describe('true if the caller says this is their first visit, false if they have been before. Only when a tool asked.'),
     notes: z.string().min(1).optional()
         .describe('Anything else relevant the caller said, in one short line.'),
 }).strict().refine((p) => Object.keys(p).length > 0, { message: 'Provide at least one field.' });
@@ -43,6 +58,8 @@ export type CallStatePatch = z.infer<typeof CallStatePatch>;
 export interface CallState {
     intent?: CallStatePatch['intent'];
     request?: string;
+    design?: (typeof DESIGN_LEVELS)[number];
+    designDescription?: string;
     service?: string;
     option?: string;
     master?: string;
@@ -51,6 +68,8 @@ export interface CallState {
     time?: string;
     customerName?: string;
     customerPhone?: string;
+    customerEmail?: string;
+    firstVisit?: boolean;
     /** Appended, never overwritten. */
     notes: string[];
     /** Every open time from the last availability search. Server only. */
@@ -71,6 +90,20 @@ export interface CallState {
     callId: string;
     /** Caller ID from the phone line, E.164. Server only. */
     callerPhone?: string;
+    /** Who the caller is in the booking provider. Server only; the model sees a summary. */
+    customer?: CustomerMatch;
+    /** The caller ID lookup started at call start. Server only. */
+    customerLookup?: Promise<void>;
+    /** Other phones/emails tried to find the profile. Server only. */
+    identifyAttempts?: number;
+}
+
+/** The caller resolved to a booking-provider customer, never guessed between duplicates. */
+export interface CustomerMatch {
+    status: 'found' | 'not_found' | 'ambiguous';
+    via: 'caller_id' | 'phone' | 'email';
+    customerId?: string;
+    hasCard?: boolean;
 }
 
 /** The dates, hours and studios an availability search covered. */
@@ -104,7 +137,7 @@ export interface Slot {
 const SLOT_INPUTS = ['service', 'option', 'location', 'master', 'date'] as const;
 
 /** What a booking needs, in the order the receptionist asks for it. */
-const BOOKING_ORDER = ['request', 'location', 'date', 'service', 'option', 'time'] as const;
+const BOOKING_ORDER = ['request', 'location', 'design', 'date', 'service', 'option', 'time'] as const;
 
 export function createCallState(callerPhone?: string): CallState {
     return { notes: [], callId: crypto.randomUUID(), callerPhone };
@@ -235,7 +268,10 @@ export function bindSlot(state: CallState, time: string): BindResult {
 export function fingerprint(state: CallState): string | undefined {
     const s = state.slot;
     if (!s) return undefined;
-    return [s.startAt, s.ref.locationId, s.ref.teamMemberId, s.ref.serviceVariationId, state.request ?? ''].join('|');
+    return [
+        s.startAt, s.ref.locationId, s.ref.teamMemberId, s.ref.serviceVariationId,
+        state.request ?? '', state.design ?? '', state.designDescription ?? '',
+    ].join('|');
 }
 
 /** One-sentence confirmation built from server state, e.g. "Gel manicure with Irina, Thu, Sep 24 at 3 PM, Pacific Avenue, $120." */
@@ -243,7 +279,10 @@ export function readBack(state: CallState): string | undefined {
     const s = state.slot;
     if (!s) return undefined;
     const what = state.request ? state.request[0]!.toUpperCase() + state.request.slice(1) : 'Your appointment';
-    return `${what}${s.master ? ` with ${s.master}` : ''}, ${s.day} at ${s.time}, ${s.studio}${s.price ? `, ${s.price}` : ''}.`;
+    const design = state.design && state.design !== 'none'
+        ? `, ${state.designDescription ?? 'custom'} design${state.design === 'custom_request' ? ' (the studio will confirm it)' : ''}`
+        : '';
+    return `${what}${design}${s.master ? ` with ${s.master}` : ''}, ${s.day} at ${s.time}, ${s.studio}${s.price ? `, ${s.price}` : ''}.`;
 }
 
 /**
@@ -251,14 +290,22 @@ export function readBack(state: CallState): string | undefined {
  * return a fresh one and remember it as heard.
  */
 export function freshReadBack(state: CallState): string | undefined {
-    const fp = fingerprint(state);
-    if (!fp || fp === state.reviewed || state.booking) return undefined;
-    state.reviewed = fp;
+    if (!needsReadBack(state)) return undefined;
+    state.reviewed = fingerprint(state);
     return readBack(state);
 }
 
+/** A slot is chosen and the caller hasn't heard this exact read-back yet. */
+export function needsReadBack(state: CallState): boolean {
+    const fp = fingerprint(state);
+    return Boolean(fp && fp !== state.reviewed && !state.booking);
+}
+
 /** Server-only fields; never shown to the model. */
-const HIDDEN = new Set(['notes', 'offeredSlots', 'slot', 'filledBySlot', 'searchWindow', 'reviewed', 'booking', 'callId', 'callerPhone']);
+const HIDDEN = new Set([
+    'notes', 'offeredSlots', 'slot', 'filledBySlot', 'searchWindow', 'reviewed', 'booking', 'callId', 'callerPhone',
+    'customer', 'customerLookup', 'identifyAttempts',
+]);
 
 /** What the model sees after each save: confirmed facts and what is still missing. */
 export function describeState(state: CallState): { confirmed: Record<string, unknown>; missing: string[] } {
@@ -268,6 +315,9 @@ export function describeState(state: CallState): { confirmed: Record<string, unk
     }
     if (state.notes.length > 0) confirmed.notes = state.notes;
     if (state.booking) confirmed.booking = state.booking.status;
+    if (state.customer?.status === 'found') {
+        confirmed.client = state.customer.hasCard ? 'known, card on file' : 'known, no card on file';
+    }
 
     const missing: string[] = [];
     const booking = state.intent === 'book' || state.intent === 'reschedule'

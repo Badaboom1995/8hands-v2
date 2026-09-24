@@ -1,13 +1,13 @@
 // square_book — book the slot the caller confirmed. No arguments: everything
 // comes from server state. Checks, in order: already booked → slot chosen →
-// caller heard the current read-back → phone → one customer with a card on
-// file → slot still open in Square → CreateBooking.
+// one known customer with a card on file (live) → caller heard the current
+// read-back → slot still open in Square → CreateBooking.
 
 import crypto from 'node:crypto';
 
 import { z } from 'zod';
 
-import { lookupCardOnFile, normalizePhone } from '../../card/enrollment';
+import { customerGate } from '../../card/identify';
 import { dropSlot, fingerprint, readBack, type CallState, type Slot } from '../../core/state';
 import { defineTool } from '../../core/tools';
 import {
@@ -15,9 +15,6 @@ import {
 } from '../../integrations/square';
 import { staffNames } from './shared';
 import { findSlots } from './slots';
-
-/** Business policy; moves to business config. On unless REQUIRE_CARD_ON_FILE=false. */
-const requireCard = () => process.env.REQUIRE_CARD_ON_FILE !== 'false';
 
 interface SlotRef {
     locationId: string;
@@ -34,7 +31,6 @@ export const squareBookTool = defineTool({
         + 'Takes no arguments; everything comes from call state. '
         + 'Call it only after the caller said yes to the latest readBack.',
     mode: 'report',
-    filler: 'booking that for you',
     args: z.object({}).strict(),
     handler: async (_args, ctx) => {
         const state = ctx.state;
@@ -45,37 +41,12 @@ export const squareBookTool = defineTool({
         if (!slot) {
             return { blocked: 'time', message: 'No time is chosen yet. Offer times with square_availability and save the one the caller picks.' };
         }
+        // Live: the card may have been added (or removed) since the read-back.
+        const gate = await customerGate(state, { live: true });
+        if (!('ok' in gate)) return gate;
         if (fingerprint(state) !== state.reviewed) {
             state.reviewed = fingerprint(state);
             return { blocked: 'review', message: 'Read this to the caller and ask them to confirm first.', readBack: readBack(state) };
-        }
-
-        const rawPhone = state.callerPhone ?? state.customerPhone;
-        if (!rawPhone) {
-            return { blocked: 'phone', message: "Ask for the caller's phone number and save it as customerPhone, then book again." };
-        }
-        let phone: string;
-        try {
-            phone = normalizePhone(rawPhone);
-        } catch {
-            return { blocked: 'phone', message: 'That phone number is not valid. Ask for it again.' };
-        }
-
-        const customer = await lookupCardOnFile(phone);
-        if (customer.kind === 'ambiguous') {
-            return { blocked: 'handoff', message: 'Several client profiles share this phone. The front desk will finish this booking and call back.' };
-        }
-        if (requireCard() && !(customer.kind === 'one' && customer.hasCard)) {
-            return {
-                blocked: 'card',
-                message: state.cardLinkSent
-                    ? 'The card is not on file yet. Ask the caller to finish the secure link, then book again.'
-                    : 'A card on file is required before booking. Explain the cancellation policy, ask for their email, '
-                        + 'and send the secure link with send_card_link.',
-            };
-        }
-        if (customer.kind !== 'one') {
-            return { blocked: 'handoff', message: 'New clients are set up by the front desk. They will call back to finish this booking.' };
         }
 
         const ref = slot.ref as unknown as SlotRef;
@@ -88,7 +59,7 @@ export const squareBookTool = defineTool({
                     .update([state.callId, slot.startAt, ref.teamMemberId, ref.serviceVariationId].join('|')).digest('hex'),
                 startAt: slot.startAt,
                 locationId: ref.locationId,
-                customerId: customer.customerId,
+                customerId: gate.customerId,
                 teamMemberId: ref.teamMemberId,
                 serviceVariationId: ref.serviceVariationId,
                 serviceVariationVersion: ref.serviceVariationVersion,
@@ -171,6 +142,10 @@ async function slotTaken(state: CallState, slot: Slot, ref: SlotRef) {
 function sellerNote(state: CallState): string {
     const parts = ['Booked by phone assistant.'];
     if (state.request) parts.push(`Request: ${state.request}.`);
+    if (state.design && state.design !== 'none') {
+        const label = state.design === 'custom_request' ? 'to be confirmed by the studio' : `level ${state.design}`;
+        parts.push(`Design: ${state.designDescription ?? 'custom'} (${label}); not included in this booking's time or price.`);
+    }
     if (state.notes.length) parts.push(`Notes: ${state.notes.join('; ')}.`);
     return parts.join(' ');
 }

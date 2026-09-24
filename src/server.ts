@@ -8,6 +8,7 @@ import path from 'node:path';
 import { WebSocketServer } from 'ws';
 
 import { completeEnrollment, EnrollmentError, getPublicSession, startEnrollment } from './card/enrollment';
+import { startCallerLookup } from './card/identify';
 import { browserCodec } from './codecs/browser';
 import { GREETING, INSTRUCTIONS } from './instructions';
 import { sendCardLinkTool } from './tools/card-link';
@@ -19,7 +20,7 @@ import { updateCallStateTool } from './tools/update-state';
 import { attachCall } from './core/transport';
 
 const API_KEY = process.env.OPENAI_API_KEY;
-const MODEL = process.env.OPENAI_REALTIME_MODEL || 'gpt-realtime';
+const MODEL = process.env.OPENAI_REALTIME_MODEL || 'gpt-realtime-2.1';
 const PORT = Number(process.env.AGENT_V2_PORT || 3100);
 const DEBUG = Boolean(process.env.AGENT_V2_DEBUG);
 
@@ -95,6 +96,7 @@ browserWss.on('connection', (ws, req) => {
         audioFormat: { type: 'audio/pcm', rate: 24000 },
         tools: [updateCallStateTool, squareServicesTool, squareMastersTool, squareAvailabilityTool, squareBookTool, sendCardLinkTool],
         callerPhone,
+        onCallStart: startCallerLookup,
         debug: DEBUG,
     });
 });

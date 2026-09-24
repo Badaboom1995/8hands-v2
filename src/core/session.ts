@@ -22,6 +22,8 @@ export interface AgentSessionOptions {
     voice?: string;
     /** Caller ID from the phone line (Twilio `From`; a test field in the browser). */
     callerPhone?: string;
+    /** Runs once with the fresh call state, e.g. to start the caller ID lookup in the background. */
+    onCallStart?: (state: CallState) => void;
     debug?: boolean;
 }
 
@@ -68,6 +70,7 @@ export class AgentSession {
         this.opts = opts;
         this.events = events;
         this.state = createCallState(opts.callerPhone);
+        opts.onCallStart?.(this.state);
         this.stats = new CallStats(opts.model);
 
         this.ws = new WebSocket(
@@ -104,16 +107,23 @@ export class AgentSession {
 
     // ── Internals ──
 
-    // Server-triggered opening turn: a response.create whose per-response
-    // instructions pin the exact wording, so the greeting is deterministic
-    // rather than left to the model.
-    private speakGreeting(greeting: string): void {
+    // One-off stage directions (e.g. the greeting) go at the end of the
+    // conversation as a system message, followed by a bare response.create.
+    // Never override `instructions` per response: the prompt is the start of
+    // the model's context, so changing it makes the whole call so far — tools,
+    // conversation, audio — miss the prompt cache and bill at full price.
+    private direct(text: string): void {
         this.send({
-            type: 'response.create',
-            response: {
-                instructions: `${this.opts.instructions}\n\nSay exactly this, verbatim, in a warm natural tone, and nothing else: "${greeting}"`,
-            },
+            type: 'conversation.item.create',
+            item: { type: 'message', role: 'system', content: [{ type: 'input_text', text }] },
         });
+    }
+
+    // Server-triggered opening turn with the exact wording, so the greeting is
+    // deterministic rather than left to the model.
+    private speakGreeting(greeting: string): void {
+        this.direct(`Greet the caller now. Say exactly this, verbatim, in a warm natural tone, and nothing else: "${greeting}"`);
+        this.send({ type: 'response.create' });
     }
 
     // ── Tool execution ──
@@ -136,37 +146,36 @@ export class AgentSession {
     private static readonly MODEL_RETRY_LIMIT = 2;       // attempts per tool before giving up
     private static readonly EXEC_RETRY_ATTEMPTS = 3;     // server-side retries on handler throw
     private static readonly EXEC_RETRY_BACKOFF_MS = 300;
-    private static readonly POST_TOOL_PAUSE_MS = 1000;
-    /** Minimum silence between the end of a filler phrase and the result speech. */
-    private static readonly FILLER_PAUSE_MS = 500;
+    /** Minimum silence between the agent's "let me check…" (or a filler) and the result speech. */
+    private static readonly SPEECH_GAP_MS = 500;
 
     /** Consecutive failed attempts per tool name, cleared on success. */
     private readonly failedAttempts = new Map<string, number>();
     /** Tool to force on the next response, after the "need a moment" speech finishes. */
     private pendingRetry: string | null = null;
 
-    // ── Filler phrase ──
+    // ── Speech timing and fillers ──
     //
-    // The model speaks one short sentence ("let me check the schedule") while the
-    // handler runs. We measure the filler's audio from the bytes we stream, so we
-    // know when playback ends and can hold the result until FILLER_PAUSE_MS later.
+    // The reply that calls a tool usually also says "let me check…". Audio is
+    // streamed faster than it plays, so we measure it from the bytes we stream
+    // and hold the result speech until SPEECH_GAP_MS after it ends.
+    //
+    // A tool may also opt into a filler: the server has the model say one short
+    // sentence ("checking the schedule") while the handler runs, and the result
+    // waits for that audio instead. No tool uses one today; the model's own
+    // "let me check…" is enough.
 
-    /** Resolves with the wall-clock time the current filler's audio ends. */
-    private fillerDone: ((audioEndsAt: number) => void) | null = null;
     private audioFirstAt = 0;
     private audioBytes = 0;
+    /** Resolves with the wall-clock time the current filler's audio ends. */
+    private fillerDone: ((audioEndsAt: number) => void) | null = null;
 
     private speakFiller(what: string): Promise<number> {
         return new Promise((resolve) => {
             this.fillerDone = resolve;
-            this.send({
-                type: 'response.create',
-                response: {
-                    tool_choice: 'none',
-                    instructions: `${this.opts.instructions}\n\nSay one short sentence telling the `
-                        + `caller you are ${what}, in the language the caller is speaking. Nothing else.`,
-                },
-            });
+            this.direct(`Right now, say one short sentence telling the caller you are ${what}, `
+                + 'in the language the caller is speaking. Nothing else. This applies to this one reply only.');
+            this.send({ type: 'response.create', response: { tool_choice: 'none' } });
         });
     }
 
@@ -178,11 +187,13 @@ export class AgentSession {
     }
 
     private async runTool(name: string, callId: string, rawArgs: string): Promise<void> {
+        // When the calling reply's own speech ends; read before any await, while
+        // the audio counters still describe that reply.
+        let speechEndsAt = this.audioBytes ? this.audioEndsAt() : 0;
         const tool = (this.opts.tools || []).find((t) => t.name === name);
         // For the trace: what the model sent, even if it fails to parse.
         let args: unknown = safeJson(rawArgs);
         let outcome: unknown;
-        let notBefore = 0; // earliest time the result response may be requested
 
         if (!tool) {
             outcome = { error: 'unknown_tool', message: `no tool named ${name}` } satisfies ToolError;
@@ -193,10 +204,7 @@ export class AgentSession {
             } else {
                 args = parsed.args;
                 const run = this.executeWithRetry(tool, parsed.args);
-                if (tool.filler) {
-                    const fillerEndsAt = await this.speakFiller(tool.filler);
-                    notBefore = fillerEndsAt + AgentSession.FILLER_PAUSE_MS;
-                }
+                if (tool.filler) speechEndsAt = await this.speakFiller(tool.filler);
                 outcome = await run;
             }
         }
@@ -231,12 +239,8 @@ export class AgentSession {
             return;
         }
 
-        // With a filler: wait until FILLER_PAUSE_MS after its audio ends. Without
-        // one, report tools still get a beat so "let me check" and the answer
-        // don't collide.
-        let pause = 0;
-        if (notBefore) pause = Math.max(0, notBefore - Date.now());
-        else if (tool?.mode === 'report' && !failed) pause = AgentSession.POST_TOOL_PAUSE_MS;
+        // Don't talk over the "let me check…" that came with the call, or the filler.
+        const pause = speechEndsAt ? Math.max(0, speechEndsAt + AgentSession.SPEECH_GAP_MS - Date.now()) : 0;
         setTimeout(() => this.send({ type: 'response.create' }), pause);
     }
 
@@ -360,7 +364,7 @@ export class AgentSession {
                 if (calls.length > 0) {
                     for (const call of calls) void this.runTool(call.name, call.call_id, call.arguments);
                 } else if (this.fillerDone) {
-                    // The filler just finished generating; report when its audio ends.
+                    // The filler just finished generating; the result waits for its audio.
                     const resolve = this.fillerDone;
                     this.fillerDone = null;
                     resolve(this.audioBytes ? this.audioEndsAt() : Date.now());
