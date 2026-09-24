@@ -137,6 +137,12 @@ In this repo:
     A handler returns `{ blocked, message }` when a precondition (e.g. location) is
     not in state yet; the model asks for it instead of retrying.
     On `error` it sends a speech-only response, then one with `tool_choice: required`.
+    A response that ends `cancelled`/`failed` is logged and shown in the UI; if no new
+    response starts within 1.5 s (or the "try again in Xs" of a rate-limit failure) and
+    the caller isn't speaking, the session requests one (max 4 in a row), so a lost
+    response never freezes the call. Several tool calls in one reply run in order and
+    trigger one follow-up response. The OpenAI account's Realtime limit is 40k tokens
+    per minute (cached tokens count); one busy call can hit it.
   - The session prompt is set once. Never send `instructions` on `response.create`:
     it replaces the prompt for that response, and since the prompt starts the model's
     context, everything after it (tools, conversation, audio) misses the prompt cache.

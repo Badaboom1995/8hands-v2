@@ -8,12 +8,9 @@ import { applyPatch, bindSlot, CallStatePatch, describeState, freshReadBack, nee
 export const updateCallStateTool = defineTool({
     name: 'update_call_state',
     description:
-        'Save facts the caller just gave you: intent, what they want, master, location, date, '
-        + 'time, or a short note; and phone, email or first visit when a tool asked for them. '
-        + 'Call this right after learning something new, before you reply. Send only the fields that changed. '
-        + 'Returns everything confirmed so far and what is still missing. '
-        + 'When a time is picked, also returns readBack (the booking summary to read to the caller), '
-        + 'or, if the caller\'s profile or card is not ready yet, "blocked" with what to do first.',
+        'Save what the caller just told you. In that reply say nothing, except "Okay, let me check that for you." '
+        + 'if a lookup follows; answer after the result. '
+        + 'Send only changed fields. Returns confirmed and missing, plus readBack or blocked.',
     args: CallStatePatch,
     mode: 'silent',
     handler: async (patch, ctx) => {

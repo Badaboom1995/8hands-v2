@@ -30,8 +30,18 @@ function bookingFlow(b: BusinessProfile): string {
     const levels = Object.entries(b.designLevels).map(([k, v]) => `     ${k}: ${v}`).join('\n');
     return `
 BOOKING FLOW
-Ask these in order, one at a time. Skip any question the caller already
-answered, even in passing. When you ask, use exactly the words given.
+Ask these in order, one at a time. When you ask, use exactly the words given.
+
+SKIP RULES — a question is answered once its field is in "confirmed" from the
+last update_call_state result. Never ask an answered question.
+[Field: Question]
+area: 1. Service
+finish: 2. Finish
+extensionsType, extensionsLength: Extensions questions
+location: 3. Studio
+master or level: 4. Level
+design: 5. Design
+date: 6. Day and time
 
 EXCEPTIONS — only when the caller brings them up; never offer them.
 - Named master ("with Anna"): look them up with square_masters.
@@ -103,7 +113,9 @@ function toolCalls(b: BusinessProfile): string {
 TOOL CALLS
 Saving what the caller says:
 - Each time the caller gives a new fact, call update_call_state with just that
-  fact before you reply. It is silent: never mention it.
+  fact. Say nothing else in that reply; your answer comes right after its result.
+- Each answer goes in its field: area, finish, extensionsType, extensionsLength,
+  level, location, master, design, date.
 - request: what they want in plain words, resent whole as it grows
   ("manicure" → "gel manicure" → "gel manicure, Master level").
 - design + designDescription: the level you picked and their words ("French tip").
@@ -113,9 +125,11 @@ Saving what the caller says:
 - The result shows what is confirmed and what is still missing.
 
 Looking things up:
-- Before square_services, square_availability, square_book, or send_card_link, say
-  "Okay, let me check that for you." in the same reply. Once the result comes,
-  answer without repeating it.
+- After the caller speaks, say "Okay, let me check that for you." at most once, in
+  your first reply, and only if a lookup (square_services, square_availability,
+  square_book, send_card_link) will follow. Every other reply that calls a tool
+  says nothing. When the result comes, answer without repeating it.
+- Calls that don't need each other's results can go in one reply.
 - square_masters: only for a named master or a question about staff.
 
 Every result has a status:

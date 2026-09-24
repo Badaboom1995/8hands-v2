@@ -6,6 +6,7 @@ import crypto from 'node:crypto';
 
 import { z } from 'zod';
 
+import { BUSINESS } from '../business';
 import { matchByName, normalize } from './names';
 
 export const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
@@ -16,42 +17,31 @@ export const DESIGN_LEVELS = [
 ] as const;
 
 export const CallStatePatch = z.object({
-    intent: z.enum(['book', 'question', 'reschedule', 'cancel', 'other']).optional()
-        .describe('Why the caller is calling, once it is clear.'),
+    // Descriptions carry only format and exact-value rules; when to set each
+    // field is in the prompt (TOOL CALLS, SKIP RULES). Every token here is sent
+    // on every request.
+    intent: z.enum(['book', 'question', 'reschedule', 'cancel', 'other']).optional(),
     request: z.string().min(1).optional()
-        .describe('What the caller wants, in plain words, with every service answer so far, '
-            + 'e.g. "manicure", then "gel manicure, Master level". Send the whole updated phrase. '
-            + 'Design goes in design/designDescription, not here.'),
+        .describe('What they want, in plain words; resend whole as it grows.'),
+    area: z.enum(['manicure', 'pedicure', 'extensions']).optional(),
+    finish: z.enum(['gel', 'regular', 'none']).optional().describe('none = no color.'),
+    extensionsType: z.enum(['refill', 'new_set']).optional(),
+    extensionsLength: z.enum(['short', 'medium', 'long']).optional(),
+    level: z.enum(BUSINESS.levels.map((l) => l.name) as [string, ...string[]]).optional(),
     design: z.enum(DESIGN_LEVELS).optional()
-        .describe('Nail design level. "none" if the caller wants no design or the service has no color; '
-            + '"custom_request" if the level stays unclear or depends on a photo.'),
-    designDescription: z.string().min(1).optional()
-        .describe('The design in the caller\'s own words, e.g. "French tip", "cat eye on two nails".'),
-    service: z.string().min(1).optional()
-        .describe('The matching catalog service, exactly as square_services named it. Only after looking it up.'),
-    option: z.string().min(1).optional()
-        .describe('Option of that service (master level, polish…), exactly as square_services named it.'),
-    master: z.string().min(1).optional()
-        .describe('Master the caller asked for by name, or "any" if another master is okay. '
-            + 'When a time is picked, the server sets the master of that slot.'),
-    location: z.string().min(1).optional()
-        .describe('Studio the caller wants, as the caller named it, or "any" if either is fine. '
-            + 'When a time is picked, the server sets the studio of that slot.'),
-    date: z.string().regex(ISO_DATE, 'Use YYYY-MM-DD.').optional()
-        .describe('Preferred date, format YYYY-MM-DD. Resolve "tomorrow" etc. before saving.'),
+        .describe('none if no design; custom_request if unclear or photo-dependent.'),
+    designDescription: z.string().min(1).optional().describe('The caller\'s words, e.g. "French tip".'),
+    service: z.string().min(1).optional().describe('Exactly as square_services named it.'),
+    option: z.string().min(1).optional().describe('Exactly as square_services named it.'),
+    master: z.string().min(1).optional().describe('A name, or "any".'),
+    location: z.string().min(1).optional().describe('A studio, or "any".'),
+    date: z.string().regex(ISO_DATE, 'Use YYYY-MM-DD.').optional().describe('YYYY-MM-DD.'),
     time: z.string().regex(/^\d{1,2}(:\d{2})? (AM|PM)$/, 'Use a time exactly as square_availability returned it, e.g. "2 PM".').optional()
-        .describe('The time the caller picked, exactly as square_availability returned it, e.g. "2:30 PM". '
-            + 'Only a time square_availability returned is accepted; the server then fills in its master and studio.'),
-    customerName: z.string().min(1).optional()
-        .describe("Caller's name, if given."),
-    customerPhone: z.string().min(1).optional()
-        .describe("A phone number the caller gave to find their profile, only when a tool asked for it."),
-    customerEmail: z.string().min(3).optional()
-        .describe('An email the caller gave to find their profile, spelled back and confirmed, only when a tool asked for it.'),
-    firstVisit: z.boolean().optional()
-        .describe('true if the caller says this is their first visit, false if they have been before. Only when a tool asked.'),
-    notes: z.string().min(1).optional()
-        .describe('Anything else relevant the caller said, in one short line.'),
+        .describe('Exactly as square_availability returned it.'),
+    customerPhone: z.string().min(1).optional(),
+    customerEmail: z.string().min(3).optional(),
+    firstVisit: z.boolean().optional(),
+    notes: z.string().min(1).optional().describe('Anything else relevant, one short line.'),
 }).strict().refine((p) => Object.keys(p).length > 0, { message: 'Provide at least one field.' });
 
 export type CallStatePatch = z.infer<typeof CallStatePatch>;
@@ -59,6 +49,11 @@ export type CallStatePatch = z.infer<typeof CallStatePatch>;
 export interface CallState {
     intent?: CallStatePatch['intent'];
     request?: string;
+    area?: CallStatePatch['area'];
+    finish?: CallStatePatch['finish'];
+    extensionsType?: CallStatePatch['extensionsType'];
+    extensionsLength?: CallStatePatch['extensionsLength'];
+    level?: string;
     design?: (typeof DESIGN_LEVELS)[number];
     designDescription?: string;
     service?: string;
@@ -67,7 +62,6 @@ export interface CallState {
     location?: string;
     date?: string;
     time?: string;
-    customerName?: string;
     customerPhone?: string;
     customerEmail?: string;
     firstVisit?: boolean;
@@ -135,10 +129,33 @@ export interface Slot {
 }
 
 /** Fields a chosen slot depends on; changing one drops the slot. */
-const SLOT_INPUTS = ['service', 'option', 'location', 'master', 'date'] as const;
+const SLOT_INPUTS = [
+    'area', 'finish', 'extensionsType', 'extensionsLength', 'level', 'service', 'option', 'location', 'master', 'date',
+] as const;
 
-/** What a booking needs, in the order the receptionist asks for it. */
-const BOOKING_ORDER = ['request', 'location', 'design', 'date', 'service', 'option', 'time'] as const;
+/**
+ * What a booking still needs, in the order the receptionist asks for it.
+ * Each question applies only when its condition holds; its answer is its field.
+ */
+function missingForBooking(s: CallState): string[] {
+    const out: string[] = [];
+    const need = (field: keyof CallState, applies = true) => {
+        if (applies && s[field] === undefined) out.push(field);
+    };
+    const nails = s.area === 'manicure' || s.area === 'pedicure';
+    need('area');
+    need('finish', nails);
+    need('extensionsType', s.area === 'extensions');
+    need('extensionsLength', s.area === 'extensions' && s.extensionsType === 'new_set');
+    need('location');
+    need('level', !s.master);
+    need('design', s.area === 'extensions' || s.finish === 'gel' || s.finish === 'regular');
+    need('date');
+    need('service');
+    need('option');
+    need('time');
+    return out;
+}
 
 export function createCallState(callerPhone?: string): CallState {
     return { notes: [], callId: crypto.randomUUID(), callerPhone };
@@ -323,13 +340,7 @@ export function describeState(state: CallState): { confirmed: Record<string, unk
         confirmed.client = state.customer.hasCard ? 'known, card on file' : 'known, no card on file';
     }
 
-    const missing: string[] = [];
     const booking = state.intent === 'book' || state.intent === 'reschedule'
-        || BOOKING_ORDER.some((key) => state[key] !== undefined);
-    if (booking) {
-        for (const key of BOOKING_ORDER) {
-            if (state[key] === undefined) missing.push(key);
-        }
-    }
-    return { confirmed, missing };
+        || state.area !== undefined || state.request !== undefined;
+    return { confirmed, missing: booking ? missingForBooking(state) : [] };
 }

@@ -47,6 +47,14 @@ export interface AgentSessionEvents {
     onClose: () => void;
 }
 
+/** Delay before retrying a failed response: OpenAI's "try again in 1.2s / 841ms" plus a margin. */
+function retryDelayMs(message: string | undefined): number {
+    const m = /try again in ([\d.]+)\s*(ms|s)\b/i.exec(message ?? '');
+    if (!m) return 1500;
+    const ms = Number(m[1]) * (m[2]!.toLowerCase() === 's' ? 1000 : 1);
+    return Math.max(1500, Math.ceil(ms) + 300);
+}
+
 function safeJson(raw: string): unknown {
     try {
         return raw ? JSON.parse(raw) : {};
@@ -154,6 +162,54 @@ export class AgentSession {
     /** Tool to force on the next response, after the "need a moment" speech finishes. */
     private pendingRetry: string | null = null;
 
+    // ── Stall recovery ──
+    //
+    // A response can end without completing: cancelled because voice detection
+    // heard "speech" (often the tail of the agent's own audio, or room noise),
+    // or failed on OpenAI's side. Nothing then triggers the next response and
+    // the call goes silent until the caller speaks. So after any such response,
+    // if no new response starts within RECOVER_MS (or the "try again in Xs" a
+    // rate-limit failure names) and the caller isn't speaking, we request one
+    // ourselves. A response the server starts on its
+    // own (after a real caller turn) cancels the timer, so there is never a
+    // second, competing response.
+
+    private static readonly RECOVER_MS = 1500;
+    private static readonly RECOVER_LIMIT = 4;           // consecutive recoveries before giving up
+    private responseActive = false;
+    private callerSpeaking = false;
+    private recoverPending = false;
+    private recoverAttempts = 0;
+    private recoverTimer: ReturnType<typeof setTimeout> | null = null;
+
+    private recoverDelayMs = AgentSession.RECOVER_MS;
+
+    private scheduleRecovery(delayMs = this.recoverDelayMs): void {
+        this.recoverDelayMs = delayMs;
+        this.recoverPending = true;
+        if (this.recoverTimer) clearTimeout(this.recoverTimer);
+        this.recoverTimer = null;
+        if (this.callerSpeaking) return; // re-armed when the caller stops
+        this.recoverTimer = setTimeout(() => {
+            this.recoverTimer = null;
+            if (!this.recoverPending || this.responseActive || this.callerSpeaking) return;
+            this.recoverPending = false;
+            if (this.recoverAttempts >= AgentSession.RECOVER_LIMIT) {
+                console.warn('[recover] giving up; waiting for the caller');
+                return;
+            }
+            this.recoverAttempts += 1;
+            console.warn(`[recover] no response after a stalled one; requesting one (attempt ${this.recoverAttempts})`);
+            this.send({ type: 'response.create' });
+        }, delayMs);
+    }
+
+    private cancelRecovery(): void {
+        this.recoverPending = false;
+        if (this.recoverTimer) clearTimeout(this.recoverTimer);
+        this.recoverTimer = null;
+    }
+
     // ── Speech timing and fillers ──
     //
     // The reply that calls a tool usually also says "let me check…". Audio is
@@ -186,10 +242,40 @@ export class AgentSession {
         return this.audioFirstAt + this.audioBytes / bytesPerMs;
     }
 
-    private async runTool(name: string, callId: string, rawArgs: string): Promise<void> {
+    /**
+     * Run every tool call from one reply, in order (a save may feed the search
+     * after it), send all results, then ask for exactly one next response.
+     * One response.create per call would collide: only one response may be
+     * active at a time.
+     */
+    private async runTools(calls: { name: string; call_id: string; arguments: string }[]): Promise<void> {
         // When the calling reply's own speech ends; read before any await, while
         // the audio counters still describe that reply.
         let speechEndsAt = this.audioBytes ? this.audioEndsAt() : 0;
+        let retry: string | null = null;
+        for (const call of calls) {
+            const r = await this.runTool(call.name, call.call_id, call.arguments);
+            if (r.fillerEndsAt) speechEndsAt = Math.max(speechEndsAt, r.fillerEndsAt);
+            if (r.willRetry && !retry) retry = call.name;
+        }
+
+        if (retry) {
+            // Speech only now; the forced retry goes out when this response is done.
+            this.pendingRetry = retry;
+            this.send({ type: 'response.create', response: { tool_choice: 'none' } });
+            return;
+        }
+
+        // Don't talk over the "let me check…" that came with the calls, or a filler.
+        const pause = speechEndsAt ? Math.max(0, speechEndsAt + AgentSession.SPEECH_GAP_MS - Date.now()) : 0;
+        setTimeout(() => this.send({ type: 'response.create' }), pause);
+    }
+
+    /** Run one tool call and send its result. The caller decides what response comes next. */
+    private async runTool(
+        name: string, callId: string, rawArgs: string,
+    ): Promise<{ willRetry: boolean; fillerEndsAt?: number }> {
+        let fillerEndsAt: number | undefined;
         const tool = (this.opts.tools || []).find((t) => t.name === name);
         // For the trace: what the model sent, even if it fails to parse.
         let args: unknown = safeJson(rawArgs);
@@ -204,7 +290,7 @@ export class AgentSession {
             } else {
                 args = parsed.args;
                 const run = this.executeWithRetry(tool, parsed.args);
-                if (tool.filler) speechEndsAt = await this.speakFiller(tool.filler);
+                if (tool.filler) fillerEndsAt = await this.speakFiller(tool.filler);
                 outcome = await run;
             }
         }
@@ -232,16 +318,7 @@ export class AgentSession {
             },
         });
 
-        if (willRetry) {
-            // Speech only now; the forced retry goes out when this response is done.
-            this.pendingRetry = name;
-            this.send({ type: 'response.create', response: { tool_choice: 'none' } });
-            return;
-        }
-
-        // Don't talk over the "let me check…" that came with the call, or the filler.
-        const pause = speechEndsAt ? Math.max(0, speechEndsAt + AgentSession.SPEECH_GAP_MS - Date.now()) : 0;
-        setTimeout(() => this.send({ type: 'response.create' }), pause);
+        return { willRetry, fillerEndsAt };
     }
 
     private sendForcedRetry(_name: string): void {
@@ -320,6 +397,8 @@ export class AgentSession {
                 break;
 
             case 'response.created':
+                this.responseActive = true;
+                this.cancelRecovery();
                 this.audioFirstAt = 0;
                 this.audioBytes = 0;
                 break;
@@ -339,7 +418,15 @@ export class AgentSession {
                 break;
 
             case 'input_audio_buffer.speech_started':
+                this.callerSpeaking = true;
+                if (this.recoverTimer) clearTimeout(this.recoverTimer);
+                this.recoverTimer = null;
                 this.events.onInterrupt();
+                break;
+
+            case 'input_audio_buffer.speech_stopped':
+                this.callerSpeaking = false;
+                if (this.recoverPending) this.scheduleRecovery();
                 break;
 
             case 'response.done': {
@@ -354,6 +441,19 @@ export class AgentSession {
                         })),
                     }));
                 }
+                this.responseActive = false;
+                const status: string | undefined = event.response?.status;
+                if (status && status !== 'completed') {
+                    // Never silent: log why, and make sure the call keeps going.
+                    const details = event.response?.status_details;
+                    const reason = details?.reason ?? details?.error?.message ?? details?.type ?? '';
+                    console.warn('[response]', status, JSON.stringify(details ?? null));
+                    this.events.onError(`response ${status}${reason ? ` (${reason})` : ''}`);
+                    this.scheduleRecovery(retryDelayMs(details?.error?.message));
+                } else if (status === 'completed') {
+                    this.recoverAttempts = 0;
+                    this.recoverDelayMs = AgentSession.RECOVER_MS;
+                }
                 const usage = event.response?.usage;
                 if (usage) this.events.onStats(this.stats.addTurn(usage));
                 this.events.onTurnDone();
@@ -362,7 +462,7 @@ export class AgentSession {
                     (item: any) => item.type === 'function_call',
                 );
                 if (calls.length > 0) {
-                    for (const call of calls) void this.runTool(call.name, call.call_id, call.arguments);
+                    void this.runTools(calls);
                 } else if (this.fillerDone) {
                     // The filler just finished generating; the result waits for its audio.
                     const resolve = this.fillerDone;
