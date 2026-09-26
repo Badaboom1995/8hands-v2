@@ -10,7 +10,7 @@ import { WebSocketServer } from 'ws';
 import { completeEnrollment, EnrollmentError, getPublicSession, startEnrollment } from './card/enrollment';
 import { startCallerLookup } from './card/identify';
 import { browserCodec } from './codecs/browser';
-import { GREETING_V2 as GREETING, INSTRUCTIONS_V2 as INSTRUCTIONS } from './instructions-v2';
+import { GREETING_V2 as GREETING, instructionsV2 } from './instructions-v2';
 import { sendCardLinkTool } from './tools/card-link';
 import { squareAvailabilityTool } from './tools/square/availability';
 import { squareBookTool } from './tools/square/book';
@@ -91,7 +91,7 @@ browserWss.on('connection', (ws, req) => {
     attachCall(ws, browserCodec(), {
         apiKey: API_KEY,
         model: MODEL,
-        instructions: INSTRUCTIONS,
+        instructions: instructionsV2(),
         greeting: GREETING,
         audioFormat: { type: 'audio/pcm', rate: 24000 },
         tools: [updateCallStateTool, squareServicesTool, squareMastersTool, squareAvailabilityTool, squareBookTool, sendCardLinkTool],

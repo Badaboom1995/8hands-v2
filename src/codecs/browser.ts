@@ -8,6 +8,7 @@ export function browserCodec(): CallCodec {
             const msg = JSON.parse(raw);
             if (msg.type === 'text') return { kind: 'text', text: msg.text };
             if (msg.type === 'audio') return { kind: 'audio', data: msg.data };
+            if (msg.type === 'calculate') return { kind: 'calculate' };
             return { kind: 'ignore' };
         },
         ready: (model) => JSON.stringify({ type: 'ready', model }),
@@ -20,5 +21,6 @@ export function browserCodec(): CallCodec {
         toolCall: (info) => JSON.stringify({ type: 'tool_call', ...info }),
         state: (state) => JSON.stringify({ type: 'state', state }),
         error: (message) => JSON.stringify({ type: 'error', message }),
+        calculation: (result) => JSON.stringify({ type: 'calculation', result }),
     };
 }

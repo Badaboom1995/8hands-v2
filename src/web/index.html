@@ -13,6 +13,19 @@
   #state dd { margin: 0; color: #eee; word-break: break-word; }
   #state dd.missing { color: #555; font-style: italic; }
   #state ul { margin: 6px 0 0; padding-left: 16px; font-size: 12.5px; color: #ccc; }
+  #side { width: 286px; flex: none; position: sticky; top: 16px; display: flex; flex-direction: column; gap: 12px; }
+  #state { position: static; }
+  #calc { border: 1px solid #333; border-radius: 8px; padding: 12px; background: #161616; font-size: 13px; }
+  #calc h4 { margin: 0; font-size: 13px; color: #aaa; text-transform: uppercase; letter-spacing: .04em; }
+  #calc header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+  #calc header button { padding: 4px 10px; font-size: 12px; }
+  #calc table { width: 100%; border-collapse: collapse; }
+  #calc td { padding: 4px 0; vertical-align: top; }
+  #calc td.n { text-align: right; white-space: nowrap; padding-left: 8px; color: #ccc; }
+  #calc .sub { color: #777; font-size: 11.5px; }
+  #calc tr.total td { border-top: 1px solid #333; font-weight: 600; padding-top: 6px; color: #eee; }
+  #calc .problem { color: #e0a040; font-size: 12px; margin-top: 8px; }
+  #calc .empty { color: #555; font-style: italic; }
   #main { flex: 1; min-width: 0; }
   #log { border: 1px solid #333; border-radius: 8px; padding: 12px; height: 60vh; overflow-y: auto; }
   .msg { margin: 8px 0; padding: 8px 12px; border-radius: 8px; white-space: pre-wrap; }
@@ -33,7 +46,10 @@
 <h3>agent-v2 <span id="status" class="sys">idle</span></h3>
 <div id="stats" class="sys"></div>
 <div id="layout">
-  <aside id="state"><h4>Call state</h4><dl id="state-fields"></dl><ul id="state-notes"></ul></aside>
+  <div id="side">
+    <aside id="state"><h4>Call state</h4><dl id="state-fields"></dl><ul id="state-notes"></ul></aside>
+    <section id="calc"><header><h4>Appointment</h4><button id="calc-btn" disabled>Calculate</button></header><div id="calc-body"><div class="empty">Press Calculate during a call.</div></div></section>
+  </div>
   <div id="main">
     <div id="log"></div>
     <div id="bar">
@@ -52,12 +68,13 @@ const input = document.getElementById('text');
 const callBtn = document.getElementById('call');
 const sendBtn = document.getElementById('send');
 const micBtn = document.getElementById('mic');
+const calcBtn = document.getElementById('calc-btn');
 
 let ws = null;
 let agentBubble = null;
 
 // Fields in the order the receptionist collects them.
-const STATE_FIELDS = ['intent', 'request', 'area', 'finish', 'extensionsType', 'extensionsLength', 'level', 'design', 'designDescription', 'service', 'option', 'master', 'location', 'date', 'time', 'client', 'booking', 'firstVisit', 'customerPhone', 'customerEmail'];
+const STATE_FIELDS = ['intent', 'request', 'area', 'finish', 'extensionsType', 'extensionsLength', 'level', 'design', 'designDescription', 'addons', 'service', 'option', 'master', 'location', 'date', 'time', 'client', 'booking', 'firstVisit', 'customerPhone', 'customerEmail'];
 function renderState(state) {
   const dl = document.getElementById('state-fields');
   dl.innerHTML = '';
@@ -77,6 +94,33 @@ function renderState(state) {
 }
 renderState({ notes: [] });
 
+// ── Appointment calculation (server composes it from call state) ──
+function fmtMinutes(m) {
+  if (m == null) return '?';
+  const h = Math.floor(m / 60), r = m % 60;
+  return h ? `${h} h${r ? ' ' + r + ' min' : ''}` : `${r} min`;
+}
+function renderCalculation(result) {
+  const body = document.getElementById('calc-body');
+  body.innerHTML = '';
+  if (result.error) { body.innerHTML = '<div class="problem"></div>'; body.firstChild.textContent = 'error: ' + result.error; return; }
+  const table = document.createElement('table');
+  const row = (cells, cls) => {
+    const tr = document.createElement('tr'); if (cls) tr.className = cls;
+    for (const [html, n] of cells) { const td = document.createElement('td'); if (n) td.className = 'n'; td.innerHTML = html; tr.appendChild(td); }
+    table.appendChild(tr);
+  };
+  const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  for (const p of result.parts) {
+    row([[`${esc(p.label)}<div class="sub">${esc(p.role)} · ${esc(p.service)} → ${esc(p.option)}</div>`], [fmtMinutes(p.minutes), true], [esc(p.price ?? '$0'), true]]);
+  }
+  if (!result.parts.length) row([['<span class="empty">No services yet</span>']]);
+  row([['Total'], [fmtMinutes(result.totalMinutes), true], [esc(result.totalPrice), true]], 'total');
+  body.appendChild(table);
+  for (const p of result.problems) { const d = document.createElement('div'); d.className = 'problem'; d.textContent = '⚠ ' + p; body.appendChild(d); }
+}
+calcBtn.onclick = () => { if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'calculate' })); };
+
 function addMsg(cls, text) {
   const div = document.createElement('div');
   div.className = 'msg ' + cls;
@@ -90,6 +134,7 @@ function setConnected(on) {
   input.disabled = !on;
   sendBtn.disabled = !on;
   micBtn.disabled = !on;
+  calcBtn.disabled = !on;
   callBtn.textContent = on ? '📵 Hang' : '📞 Call';
   callBtn.classList.toggle('on', on);
 }
@@ -211,6 +256,9 @@ function connect() {
         addMsg('sys', `turn: in ${t.input.toLocaleString()} (cached ${t.cached.toLocaleString()}, ${t.cachePct}%) · out ${t.output.toLocaleString()} · $${t.cost.toFixed(4)}`);
         break;
       }
+      case 'calculation':
+        renderCalculation(msg.result);
+        break;
       case 'error':
         addMsg('sys', 'error: ' + msg.message);
         break;

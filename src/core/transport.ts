@@ -6,6 +6,7 @@
 import WebSocket from 'ws';
 
 import { AgentSession, type AgentSessionOptions } from './session';
+import { composeAppointment, type Appointment } from '../tools/square/compose';
 import type { CallState } from './state';
 import type { CallTotals, TurnStats } from './stats';
 
@@ -13,6 +14,8 @@ import type { CallTotals, TurnStats } from './stats';
 export type InboundMsg =
     | { kind: 'text'; text: string }
     | { kind: 'audio'; data: string }
+    /** Test UI: price and time the appointment in call state. */
+    | { kind: 'calculate' }
     | { kind: 'ignore' };
 
 // One codec instance per connection (may hold per-call state, e.g. Twilio's streamSid).
@@ -29,6 +32,7 @@ export interface CallCodec {
     toolCall?(info: { name: string; args: unknown; result: unknown }): string | null;
     state?(state: CallState): string | null;
     error?(message: string): string | null;
+    calculation?(result: Appointment | { error: string }): string | null;
 }
 
 export function attachCall(ws: WebSocket, codec: CallCodec, opts: AgentSessionOptions): void {
@@ -58,6 +62,12 @@ export function attachCall(ws: WebSocket, codec: CallCodec, opts: AgentSessionOp
         const msg = codec.decode(data.toString());
         if (msg.kind === 'text') session.sendText(msg.text);
         else if (msg.kind === 'audio') session.sendAudio(msg.data);
+        else if (msg.kind === 'calculate' && codec.calculation) {
+            composeAppointment(session.state).then(
+                (result) => out(codec.calculation!(result)),
+                (err) => out(codec.calculation!({ error: err instanceof Error ? err.message : String(err) })),
+            );
+        }
     });
 
     ws.on('close', () => {

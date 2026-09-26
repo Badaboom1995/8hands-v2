@@ -31,6 +31,8 @@ export const CallStatePatch = z.object({
     design: z.enum(DESIGN_LEVELS).optional()
         .describe('none if no design; custom_request if unclear or photo-dependent.'),
     designDescription: z.string().min(1).optional().describe('The caller\'s words, e.g. "French tip".'),
+    addons: z.array(z.enum(Object.keys(BUSINESS.addons) as [string, ...string[]])).optional()
+        .describe('Every extra, resent whole; [] for none.'),
     service: z.string().min(1).optional().describe('Exactly as square_services named it.'),
     option: z.string().min(1).optional().describe('Exactly as square_services named it.'),
     master: z.string().min(1).optional().describe('A name, or "any".'),
@@ -56,6 +58,8 @@ export interface CallState {
     level?: string;
     design?: (typeof DESIGN_LEVELS)[number];
     designDescription?: string;
+    /** Extras on top of the main service, business add-on keys, sorted, no repeats. */
+    addons?: string[];
     service?: string;
     option?: string;
     master?: string;
@@ -153,7 +157,7 @@ function missingForBooking(s: CallState): string[] {
     need('date');
     need('service');
     need('option');
-    need('time');
+    need('time', Boolean(s.offeredSlots?.length)); // a pick from offered times, not a question
     return out;
 }
 
@@ -180,11 +184,14 @@ export function applyPatch(state: CallState, patch: Omit<CallStatePatch, 'time'>
             continue;
         }
         // "any" master means no preference: the field is simply unset.
-        const next = key === 'master' && normalize(value as string) === 'any' ? undefined : value;
+        let next = key === 'master' && normalize(value as string) === 'any' ? undefined : value;
+        if (key === 'addons') next = [...new Set(value as string[])].sort();
         const current = (state as unknown as Record<string, unknown>)[key];
         if (next === undefined && current === undefined) continue;
-        const same = typeof current === 'string' && typeof next === 'string'
-            && (key === 'location' || key === 'master' ? sameName(next, current) : next === current);
+        const same = Array.isArray(next)
+            ? Array.isArray(current) && current.join() === next.join()
+            : typeof current === 'string' && typeof next === 'string'
+                && (key === 'location' || key === 'master' ? sameName(next, current) : next === current);
         if (same) continue;
         if (state.slot && (SLOT_INPUTS as readonly string[]).includes(key)) {
             dropSlot(state);
@@ -291,11 +298,11 @@ export function fingerprint(state: CallState): string | undefined {
     if (!s) return undefined;
     return [
         s.startAt, s.ref.locationId, s.ref.teamMemberId, s.ref.serviceVariationId,
-        state.request ?? '', state.design ?? '', state.designDescription ?? '',
+        state.request ?? '', state.design ?? '', state.designDescription ?? '', (state.addons ?? []).join(','),
     ].join('|');
 }
 
-/** One-sentence confirmation built from server state, e.g. "Gel manicure with Irina, Thu, Sep 24 at 3 PM, Pacific Avenue, $120." */
+/** One-sentence confirmation built from server state, e.g. "Gel manicure, plus hand spa, with Irina, Thu, Sep 24 at 3 PM, Pacific Avenue, $120." */
 export function readBack(state: CallState): string | undefined {
     const s = state.slot;
     if (!s) return undefined;
@@ -303,7 +310,14 @@ export function readBack(state: CallState): string | undefined {
     const design = state.design && state.design !== 'none'
         ? `, ${state.designDescription ?? 'custom'} design${state.design === 'custom_request' ? ' (the studio will confirm it)' : ''}`
         : '';
-    return `${what}${design}${s.master ? ` with ${s.master}` : ''}, ${s.day} at ${s.time}, ${s.studio}${s.price ? `, ${s.price}` : ''}.`;
+    const addons = state.addons?.length ? `, plus ${addonWords(state.addons)}` : '';
+    return `${what}${design}${addons}${s.master ? `${addons ? ',' : ''} with ${s.master}` : ''}, ${s.day} at ${s.time}, ${s.studio}${s.price ? `, ${s.price}` : ''}.`;
+}
+
+/** "hand spa and acrylic or dip removal", as the business says them. */
+export function addonWords(keys: string[]): string {
+    const words = keys.map((k) => BUSINESS.addons[k] ?? k);
+    return words.length > 1 ? `${words.slice(0, -1).join(', ')} and ${words.at(-1)}` : words[0] ?? '';
 }
 
 /**

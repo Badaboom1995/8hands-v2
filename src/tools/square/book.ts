@@ -8,7 +8,7 @@ import crypto from 'node:crypto';
 import { z } from 'zod';
 
 import { customerGate } from '../../card/identify';
-import { dropSlot, fingerprint, readBack, type CallState, type Slot } from '../../core/state';
+import { addonWords, dropSlot, fingerprint, readBack, type CallState, type Slot } from '../../core/state';
 import { defineTool } from '../../core/tools';
 import {
     createBooking, listBookableTeam, listServiceItems, searchAvailability, SquareError,
@@ -145,6 +145,9 @@ function sellerNote(state: CallState): string {
     if (state.design && state.design !== 'none') {
         const label = state.design === 'custom_request' ? 'to be confirmed by the studio' : `level ${state.design}`;
         parts.push(`Design: ${state.designDescription ?? 'custom'} (${label}); not included in this booking's time or price.`);
+    }
+    if (state.addons?.length) {
+        parts.push(`Add-ons: ${addonWords(state.addons)}; not included in this booking's time or price.`);
     }
     if (state.notes.length) parts.push(`Notes: ${state.notes.join('; ')}.`);
     return parts.join(' ');

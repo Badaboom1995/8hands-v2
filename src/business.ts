@@ -2,6 +2,14 @@
 // wording, policies, and how to read the provider's catalog. Data, not code;
 // moves to the database when there is more than one business.
 
+/** A catalog service (and option) by name, as the booking provider names it. */
+export interface CatalogRef {
+    service: string;
+    option?: string;
+    /** Done before the main service (e.g. removal). */
+    before?: boolean;
+}
+
 export interface BusinessProfile {
     agentName: string;
     /** Spoken verbatim as soon as the call connects. */
@@ -10,6 +18,8 @@ export interface BusinessProfile {
     /** "a nail salon" */
     businessType: string;
     city: string;
+    /** IANA time zone the business speaks dates in, e.g. "America/Los_Angeles". */
+    timezone: string;
     /** Spoken languages, e.g. "English". */
     languages: string;
     /** The only allowed answer to "are you an AI?". */
@@ -28,6 +38,15 @@ export interface BusinessProfile {
     };
     /** Design add-on levels with the caller-facing descriptors that identify each. */
     designLevels: Record<string, string>;
+    /**
+     * Extras booked on top of a main service, by key, with how the agent says each.
+     * A standalone one (e.g. hand spa alone) is a main service, not an add-on.
+     */
+    addons: Record<string, string>;
+    /** Catalog service for each design level; custom_request has none. */
+    designServices: Record<string, CatalogRef>;
+    /** Catalog service for each add-on key. */
+    addonServices: Record<string, CatalogRef>;
     /** Said word for word when a card on file is required. */
     cardPolicy: string;
     /** Services callers ask for that the business does not offer, e.g. "Gel-X". */
@@ -47,6 +66,7 @@ export const ZORINA: BusinessProfile = {
     businessName: 'Zorina Nail Studio',
     businessType: 'a nail salon',
     city: 'San Francisco',
+    timezone: 'America/Los_Angeles',
     languages: 'English',
     aiDisclosure: 'I\'m Zorina\'s virtual receptionist, and I can help with services and appointments.',
     questions: {
@@ -68,6 +88,24 @@ export const ZORINA: BusinessProfile = {
         extra_hard: '3+ colors, intricate art, or several detailed accents',
         xxtra_hard: '5+ colors, or different art on each nail',
         extra_per_nail: 'charms, crystals, 3D details on some nails',
+    },
+    addons: {
+        hand_spa: 'hand spa',
+        removal: 'acrylic or dip removal',
+        nail_extension: 'one-nail extension',
+    },
+    designServices: {
+        simple: { service: 'Designs', option: 'Simple Level Design' },
+        medium: { service: 'Designs', option: 'Medium Level Design' },
+        hard: { service: 'Designs', option: 'Hard Level Design' },
+        extra_hard: { service: 'Designs', option: 'Extra Hard Design' },
+        xxtra_hard: { service: 'Designs', option: 'XXTra Hard Design' },
+        extra_per_nail: { service: 'Designs', option: 'Extra per nail' },
+    },
+    addonServices: {
+        hand_spa: { service: 'Hand Spa' },
+        removal: { service: 'Acrylic/dip powder nail removal', before: true },
+        nail_extension: { service: 'Extension for 1 nail' },
     },
     // Playbook exact text (policyContext + bookingPolicy.cancellation.exactText).
     cardPolicy: 'A valid card on file is required for every appointment. '

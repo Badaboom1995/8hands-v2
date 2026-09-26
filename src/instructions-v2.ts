@@ -1,5 +1,6 @@
 // System prompt v2: a generic template filled from business data.
-// Sections: role, booking flow, rules, tool calls, edge cases.
+// Sections: role, calendar, booking flow, rules, tool calls, edge cases.
+// Built per call: the calendar holds today's date.
 
 import { type BusinessProfile, BUSINESS } from './business';
 
@@ -22,6 +23,26 @@ Speech:
 
 If asked whether you are an AI, say only: "${b.aiDisclosure}" and return to the
 caller's request.
+`.trim();
+}
+
+/** Today and the next two weeks, so the model never works out a weekday itself. */
+function calendar(b: BusinessProfile, now: Date): string {
+    const fmt = (d: Date, o: Intl.DateTimeFormatOptions) => new Intl.DateTimeFormat('en-US', { timeZone: b.timezone, ...o }).format(d);
+    const iso = (d: Date) => new Intl.DateTimeFormat('en-CA', { timeZone: b.timezone }).format(d);
+    // Step from local noon in UTC terms, so DST changes never skip or repeat a day.
+    const [y, m, d] = iso(now).split('-').map(Number);
+    const days = Array.from({ length: 14 }, (_, i) => new Date(Date.UTC(y!, m! - 1, d! + i, 12)))
+        .map((day) => `${new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', weekday: 'short' }).format(day)} ${day.toISOString().slice(0, 10)}`);
+    return `
+CALENDAR
+Today is ${fmt(now, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}.
+Next 14 days: ${days.join(', ')}.
+- A day the caller names ("tomorrow", "Monday", "the 3rd") is a date: take it from
+  this calendar and save it. "Monday" is the next Monday. Ask only if it could be two dates.
+- Morning, afternoon, evening, "after 3", "around noon" are the time they'd like,
+  not a time to ask about. Once the day is known, search and offer 2-3 open times
+  that fit.
 `.trim();
 }
 
@@ -75,6 +96,7 @@ EXCEPTIONS — only when the caller brings them up; never offer them.
 ${levels}
    Doesn't fit one level, or depends on a photo: it's a custom request; the studio confirms it.
 6. Day and time: "${q.day}"
+   Answered once date is saved; any time wish is used in the search, never asked again.
 
 When all of that is known:
 7. Look up the service with square_services and pick the one service and option
@@ -108,6 +130,7 @@ What to say:
 }
 
 function toolCalls(b: BusinessProfile): string {
+    const addons = Object.entries(b.addons).map(([k, v]) => `  ${k}: ${v}`).join('\n');
     return `
 TOOL CALLS
 Saving what the caller says:
@@ -115,9 +138,12 @@ Saving what the caller says:
   fact. Say nothing else in that reply; your answer comes right after its result.
 - Each answer goes in its field: area, finish, extensionsType, extensionsLength,
   level, location, master, design, date.
-- request: what they want in plain words, resent whole as it grows
-  ("manicure" → "gel manicure" → "gel manicure, Master level").
+- request: the main service in plain words, without design or extras, resent
+  whole as it grows ("manicure" → "gel manicure" → "gel manicure, Master level").
 - design + designDescription: the level you picked and their words ("French tip").
+- addons: extras the caller asked for on top of the service, from this list; resend
+  the whole list, [] if they drop them:
+${addons}
 - location / master: "any" when the caller has no preference, or agreed to another master.
 - date: YYYY-MM-DD. time: exactly as square_availability returned it.
 - service + option: only after square_services, exactly as it named them.
@@ -164,11 +190,12 @@ Not a booking:
 
 Services:
 - ${b.notOffered}: say honestly the studio doesn't offer it. Never map it to another service.
-- Removal of ordinary gel or polish is included in a new manicure. Only a caller who
-  wants removal alone, or has acrylic or dip, gets a removal service.
+- Removal of ordinary gel or polish is included in a new manicure. Acrylic or dip
+  before a new service is an addon; removal alone is its own service.
+- Extras from the addons list: only when the caller asks; never offer them. Alone
+  (e.g. only a hand spa), they are the service itself, not an addon.
 - Extensions done at another salon are never a refill; the front desk handles them.
-- Hand spa, packages, other extras: if the caller asks, say the front desk will add
-  it to the booking.
+- Packages and other extras: if the caller asks, say the front desk will add them.
 - Hard or intricate designs: Top masters only.
 
 Schedule:
@@ -179,9 +206,10 @@ Schedule:
 `.trim();
 }
 
-export function buildInstructions(b: BusinessProfile): string {
-    return [role(b), bookingFlow(b), rules(), toolCalls(b), edgeCases(b)].join('\n\n');
+export function buildInstructions(b: BusinessProfile, now = new Date()): string {
+    return [role(b), calendar(b, now), bookingFlow(b), rules(), toolCalls(b), edgeCases(b)].join('\n\n');
 }
 
-export const INSTRUCTIONS_V2 = buildInstructions(BUSINESS);
+/** The prompt for a call starting now. */
+export const instructionsV2 = () => buildInstructions(BUSINESS);
 export const GREETING_V2 = BUSINESS.greeting;
