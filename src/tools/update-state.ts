@@ -3,8 +3,11 @@
 
 import { customerGate, identifyFromPatch } from '../card/identify';
 import { defineTool } from '../core/tools';
-import { applyPatch, bindSlot, CallStatePatch, describeState, freshReadBack, needsReadBack } from '../core/state';
+import {
+    applyPatch, bindSlot, CallStatePatch, describeState, freshReadBack, needsReadBack, SLOT_INPUTS,
+} from '../core/state';
 import { resolveNamedMaster } from './square/masters';
+import { recheckSlot } from './square/research';
 
 export const updateCallStateTool = defineTool({
     name: 'update_call_state',
@@ -17,7 +20,16 @@ export const updateCallStateTool = defineTool({
     handler: async (patch, ctx) => {
         const state = ctx.state;
         const { time, ...facts } = patch;
+        const before = state.slot;
         const saved = applyPatch(state, facts);
+
+        // Only the design or add-ons changed after a time was chosen: the length
+        // changed, so check whether that same time still fits.
+        const inputs = saved.filter((k) => (SLOT_INPUTS as readonly string[]).includes(k));
+        if (before && !state.slot && !time && inputs.length && inputs.every((k) => k === 'design' || k === 'addons')) {
+            const moved = await recheckSlot(state, before);
+            if (moved) return { ...moved, saved, ...describeState(state) };
+        }
 
         // Another phone or email to find the caller's profile.
         if (saved.includes('customerPhone') || saved.includes('customerEmail')) {

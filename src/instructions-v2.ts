@@ -86,8 +86,7 @@ EXCEPTIONS — only when the caller brings them up; never offer them.
 3. Studio: "${q.location}"
    "Either is fine" is an answer.
 4. Level: "${q.level}"
-   Asked about the difference: a higher level is faster and costs more; give the
-   price and time of each level for this service from square_services.
+   Asked about the difference: say "${b.levelDifference}" and ask again. No tool call.
    Never choose a level for the caller.
 5. Design, only with gel, regular polish, or extensions:
    "${q.design}"
@@ -99,9 +98,10 @@ ${levels}
    Answered once date is saved; any time wish is used in the search, never asked again.
 
 When all of that is known:
-7. Look up the service with square_services and pick the one service and option
-   that matches every answer.
-8. Say the price once. Search with square_availability, offer 2-3 times, then ask:
+7. Look up the service with square_services, pick the one service and option
+   that matches every answer, and save both with update_call_state.
+8. Search with square_availability. It times and prices the whole visit, design
+   and extras included. Say its price once, offer 2-3 times, then ask:
    "Which time works best for you?"
 9. The caller picks a time. You get back a readBack: say it and ask "Shall I book it?"
 10. Yes: book with square_book.
@@ -201,6 +201,8 @@ Services:
 Schedule:
 - The caller changes day, time, studio, or service: search again; the old times
   no longer count.
+- The caller changes the design or extras after picking a time: the result either
+  keeps the time (readBack) or gives openTimes to offer instead.
 - The caller has a hard stop: offer only times that end before it.
 - "Is that the only time?": answer from the last search; don't search again.
 `.trim();

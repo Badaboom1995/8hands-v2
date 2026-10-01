@@ -123,18 +123,31 @@ export interface Slot {
     time: string;
     studio: string;
     master?: string;
-    /** "$120", as the agent says it. */
+    /** Whole appointment, "$120", as the agent says it. */
     price?: string;
+    /** Whole appointment. */
     minutes?: number;
     /** UTC instant. */
     startAt: string;
-    /** Provider data needed to book it (ids, versions). Never shown to the model. */
-    ref: Record<string, unknown>;
+    /** Provider data needed to book it. Never shown to the model. */
+    ref: SlotRef;
+}
+
+/** Where, and each service back to back with who, how long, and which catalog version. */
+export interface SlotRef {
+    locationId: string;
+    segments: {
+        teamMemberId: string;
+        serviceVariationId: string;
+        serviceVariationVersion: number;
+        durationMinutes: number;
+    }[];
 }
 
 /** Fields a chosen slot depends on; changing one drops the slot. */
-const SLOT_INPUTS = [
-    'area', 'finish', 'extensionsType', 'extensionsLength', 'level', 'service', 'option', 'location', 'master', 'date',
+export const SLOT_INPUTS = [
+    'area', 'finish', 'extensionsType', 'extensionsLength', 'level', 'service', 'option', 'design', 'addons',
+    'location', 'master', 'date',
 ] as const;
 
 /**
@@ -297,7 +310,7 @@ export function fingerprint(state: CallState): string | undefined {
     const s = state.slot;
     if (!s) return undefined;
     return [
-        s.startAt, s.ref.locationId, s.ref.teamMemberId, s.ref.serviceVariationId,
+        s.startAt, s.ref.locationId, ...s.ref.segments.map((x) => `${x.teamMemberId}:${x.serviceVariationId}`),
         state.request ?? '', state.design ?? '', state.designDescription ?? '', (state.addons ?? []).join(','),
     ].join('|');
 }

@@ -36,6 +36,8 @@ export interface BusinessProfile {
         design: string;
         day: string;
     };
+    /** Said word for word when the caller asks how the technician levels differ. */
+    levelDifference: string;
     /** Design add-on levels with the caller-facing descriptors that identify each. */
     designLevels: Record<string, string>;
     /**
@@ -80,6 +82,8 @@ export const ZORINA: BusinessProfile = {
         design: 'Would you like to add a nail design, or is there anything special you\'d like?',
         day: 'What day and time would work for you?',
     },
+    levelDifference: 'The higher the level, the more experienced the technician: the appointment is faster '
+        + 'and costs a bit more. Complex designs are done by our Top technicians.',
     // From the Square "Designs" item descriptions.
     designLevels: {
         simple: 'cat eye, or a minimal design on one nail',

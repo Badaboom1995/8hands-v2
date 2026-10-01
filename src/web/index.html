@@ -117,7 +117,7 @@ function renderCalculation(result) {
   if (!result.parts.length) row([['<span class="empty">No services yet</span>']]);
   row([['Total'], [fmtMinutes(result.totalMinutes), true], [esc(result.totalPrice), true]], 'total');
   body.appendChild(table);
-  for (const p of result.problems) { const d = document.createElement('div'); d.className = 'problem'; d.textContent = '⚠ ' + p; body.appendChild(d); }
+  for (const p of result.problems) { const d = document.createElement('div'); d.className = 'problem'; d.textContent = `⚠ ${p.label}: ${p.message}`; body.appendChild(d); }
 }
 calcBtn.onclick = () => { if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'calculate' })); };
 

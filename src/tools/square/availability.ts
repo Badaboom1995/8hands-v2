@@ -1,4 +1,5 @@
-// square_availability — open times for one service option, read live from Square.
+// square_availability — open times for the whole appointment in call state
+// (service, design, add-ons, back to back with one master), read live from Square.
 // Searches one studio, or every studio in parallel when none is given.
 
 import { z } from 'zod';
@@ -6,28 +7,23 @@ import { z } from 'zod';
 import { defineTool } from '../../core/tools';
 import { ISO_DATE } from '../../core/state';
 import { listBookableTeam, listServiceItems, type SquareLocation } from '../../integrations/square';
-import {
-    dayLabel, groupServices, listStudios, localDate, matchByName, minutes, normalize, optionName, price, spread,
-    staffNames,
-} from './shared';
+import { bookableAppointment } from './compose';
+import { dayLabel, groupServices, listStudios, localDate, matchByName, normalize, spread, staffNames } from './shared';
 import { findSlots } from './slots';
+
 const TIMES_PER_DAY = 6;
 const MAX_DAYS_SHOWN = 7;
 
 export const squareAvailabilityTool = defineTool({
     name: 'square_availability',
     description:
-        'Look up open appointment times for a service. '
-        + 'service and option must be names exactly as square_services returned them; '
-        + 'master exactly as square_masters returned it. '
-        + 'Without location it searches every studio. '
-        + 'Returns, per studio and day, a spread of open start times with the master for each; '
-        + '"more" counts times not listed. Days with no open times are left out.',
+        'Look up open times for the appointment in call state: the saved service and option, '
+        + 'plus the design and extras, done back to back by one master. '
+        + 'master exactly as square_masters returned it. Without location it searches every studio. '
+        + 'Returns the whole visit\'s price and minutes and, per studio and day, a spread of open start '
+        + 'times with the master for each; "more" counts times not listed. Days with no open times are left out.',
     mode: 'report',
     args: z.object({
-        service: z.string().min(1).describe('Service name exactly as square_services returned it.'),
-        option: z.string().min(1).optional()
-            .describe('Option name exactly as square_services returned it. Required when the service has several.'),
         location: z.string().min(1).optional().describe('Studio the caller wants. Omit to search every studio.'),
         master: z.string().min(1).optional().describe('Master the caller asked for. Omit, or "any", for anyone.'),
         startDate: z.string().regex(ISO_DATE, 'Use YYYY-MM-DD.').optional()
@@ -38,37 +34,15 @@ export const squareAvailabilityTool = defineTool({
     }),
     handler: async (args, ctx) => {
         const [items, allLocations, team] = await Promise.all([listServiceItems(), listStudios(), listBookableTeam()]);
-        const services = groupServices(items);
         const names = staffNames(team);
 
-        // Service → one Square variation.
-        const serviceMatches = matchByName(args.service, services, (s) => s.name);
-        if (serviceMatches.length !== 1) {
-            return {
-                blocked: 'service',
-                message: serviceMatches.length
-                    ? `"${args.service}" matches several services; ask which one.`
-                    : `No service named "${args.service}". Look it up with square_services first.`,
-                ...(serviceMatches.length ? { candidates: serviceMatches.map((s) => s.name) } : {}),
-            };
-        }
-        const service = serviceMatches[0]!;
-        const optionMatches = service.variations.length === 1 ? service.variations
-            : args.option ? matchByName(args.option, service.variations, optionName) : [];
-        if (optionMatches.length !== 1) {
-            return {
-                blocked: 'option',
-                message: args.option
-                    ? `"${args.option}" does not pick one option of ${service.name}; ask the caller which one.`
-                    : `${service.name} has several options; ask the caller which one.`,
-                options: (optionMatches.length ? optionMatches : service.variations).map(optionName),
-            };
-        }
-        const variation = optionMatches[0]!;
-        const performers = variation.item_variation_data?.team_member_ids ?? [];
+        const bookable = await bookableAppointment(ctx.state, groupServices(items));
+        if ('blocked' in bookable) return bookable;
+        const { appointment, note } = bookable;
+        const labels = appointment.parts.map((p) => p.label);
 
-        // Master → team member id, who must perform this option.
-        let teamMemberIds: string[] | undefined;
+        // Master → team member id, who must do every part.
+        let teamMemberIds = appointment.performers;
         if (args.master && normalize(args.master) !== 'any') {
             const found = matchByName(args.master, team, (m) => names.get(m.id)!);
             if (found.length !== 1) {
@@ -81,11 +55,12 @@ export const squareAvailabilityTool = defineTool({
                 };
             }
             const master = found[0]!;
-            if (!performers.includes(master.id)) {
+            const notDone = appointment.parts.filter((p) => !p.performers.includes(master.id));
+            if (notDone.length) {
                 return {
                     blocked: 'master',
-                    message: `${names.get(master.id)} does not do this option.`,
-                    mastersForThisOption: performers.map((id) => names.get(id)).filter(Boolean),
+                    message: `${names.get(master.id)} does not do ${notDone.map((p) => p.label).join(' or ')}.`,
+                    mastersForAll: appointment.performers.map((id) => names.get(id)).filter(Boolean),
                 };
             }
             teamMemberIds = [master.id];
@@ -108,7 +83,8 @@ export const squareAvailabilityTool = defineTool({
         }
 
         const { perLocation, window } = await findSlots({
-            variation, locations, names, teamMemberIds,
+            variationIds: appointment.parts.map((p) => p.variationId),
+            locations, names, teamMemberIds, price: appointment.totalPrice,
             startDate: args.startDate, days: args.days ?? 1, partOfDay: args.partOfDay,
         });
         // Every open time goes into state, so the caller's pick binds to an exact slot.
@@ -125,7 +101,7 @@ export const squareAvailabilityTool = defineTool({
             const allDays = [...byDay.entries()].sort(([a], [b]) => a.localeCompare(b));
             return {
                 studio: location.name,
-                ...(unavailable ? { note: 'This option cannot be booked at this studio.' } : {}),
+                ...(unavailable ? { note: 'This appointment cannot be booked at this studio.' } : {}),
                 days: allDays.slice(0, MAX_DAYS_SHOWN).map(([date, d]) => {
                     const shown = spread(d.times, TIMES_PER_DAY);
                     return { date, day: d.day, times: shown, ...(d.times.length > shown.length ? { more: d.times.length - shown.length } : {}) };
@@ -138,10 +114,10 @@ export const squareAvailabilityTool = defineTool({
         const tz = locations[0]?.timezone || 'UTC';
         return {
             today: `${localDate(now, tz)} (${dayLabel(now, tz)})`,
-            service: service.name,
-            option: optionName(variation),
-            price: price(variation),
-            minutes: minutes(variation),
+            includes: labels,
+            price: appointment.totalPrice,
+            minutes: appointment.totalMinutes,
+            ...(note ? { designNote: note } : {}),
             results,
             ...(results.every((r) => r.days.length === 0) ? { note: 'No open times in this window.' } : {}),
         };

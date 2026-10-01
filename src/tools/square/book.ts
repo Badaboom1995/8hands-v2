@@ -8,21 +8,10 @@ import crypto from 'node:crypto';
 import { z } from 'zod';
 
 import { customerGate } from '../../card/identify';
-import { addonWords, dropSlot, fingerprint, readBack, type CallState, type Slot } from '../../core/state';
+import { addonWords, fingerprint, readBack, type CallState, type Slot } from '../../core/state';
 import { defineTool } from '../../core/tools';
-import {
-    createBooking, listBookableTeam, listServiceItems, searchAvailability, SquareError,
-} from '../../integrations/square';
-import { listStudios, staffNames } from './shared';
-import { findSlots } from './slots';
-
-interface SlotRef {
-    locationId: string;
-    teamMemberId: string;
-    serviceVariationId: string;
-    serviceVariationVersion: number;
-    durationMinutes: number;
-}
+import { createBooking, searchAvailability, SquareError } from '../../integrations/square';
+import { slotTaken } from './research';
 
 export const squareBookTool = defineTool({
     name: 'square_book',
@@ -49,21 +38,19 @@ export const squareBookTool = defineTool({
             return { blocked: 'review', message: 'Read this to the caller and ask them to confirm first.', readBack: readBack(state) };
         }
 
-        const ref = slot.ref as unknown as SlotRef;
-        if (!(await stillOpen(slot, ref))) return await slotTaken(state, slot, ref);
+        const ref = slot.ref;
+        if (!(await stillOpen(slot))) return await slotTaken(state);
 
         let booking;
         try {
             booking = await createBooking({
                 idempotencyKey: crypto.createHash('sha256')
-                    .update([state.callId, slot.startAt, ref.teamMemberId, ref.serviceVariationId].join('|')).digest('hex'),
+                    .update([state.callId, slot.startAt, ...ref.segments.map((x) => `${x.teamMemberId}:${x.serviceVariationId}`)].join('|'))
+                    .digest('hex'),
                 startAt: slot.startAt,
                 locationId: ref.locationId,
                 customerId: gate.customerId,
-                teamMemberId: ref.teamMemberId,
-                serviceVariationId: ref.serviceVariationId,
-                serviceVariationVersion: ref.serviceVariationVersion,
-                durationMinutes: ref.durationMinutes,
+                segments: ref.segments,
                 sellerNote: sellerNote(state),
             });
         } catch (err) {
@@ -85,16 +72,15 @@ export const squareBookTool = defineTool({
     },
 });
 
-/** Ask Square again for exactly this start, master and option. */
-async function stillOpen(slot: Slot, ref: SlotRef): Promise<boolean> {
+/** Ask Square again for exactly this start, with the same services and masters. */
+async function stillOpen(slot: Slot): Promise<boolean> {
     const start = Date.parse(slot.startAt);
     try {
         const found = await searchAvailability({
-            locationId: ref.locationId,
+            locationId: slot.ref.locationId,
             startAt: slot.startAt,
             endAt: new Date(start + 3600_000).toISOString(), // Square's minimum range is 1 hour
-            serviceVariationId: ref.serviceVariationId,
-            teamMemberIds: [ref.teamMemberId],
+            segments: slot.ref.segments.map((x) => ({ serviceVariationId: x.serviceVariationId, teamMemberIds: [x.teamMemberId] })),
         });
         return found.some((a) => Date.parse(a.start_at) === start);
     } catch (err) {
@@ -103,52 +89,15 @@ async function stillOpen(slot: Slot, ref: SlotRef): Promise<boolean> {
     }
 }
 
-/** The slot is gone: search that day again and offer the nearest times. */
-async function slotTaken(state: CallState, slot: Slot, ref: SlotRef) {
-    const masterWasAsked = !state.filledBySlot?.includes('master');
-    const locationWasAsked = !state.filledBySlot?.includes('location');
-    const [items, locations, team] = await Promise.all([listServiceItems(), listStudios(), listBookableTeam()]);
-    const variation = items.flatMap((i) => i.item_data?.variations ?? []).find((v) => v.id === ref.serviceVariationId);
-    dropSlot(state);
-    if (!variation) {
-        return { blocked: 'handoff', message: 'That time was just taken and this service can no longer be booked by phone.' };
-    }
-
-    const { perLocation, window } = await findSlots({
-        variation,
-        locations: locationWasAsked ? locations.filter((l) => l.id === ref.locationId) : locations,
-        names: staffNames(team),
-        teamMemberIds: masterWasAsked ? [ref.teamMemberId] : undefined,
-        startDate: slot.date,
-        days: 1,
-    });
-    state.offeredSlots = perLocation.flatMap((l) => l.slots);
-    state.searchWindow = window;
-
-    const start = Date.parse(slot.startAt);
-    const nearest = [...state.offeredSlots]
-        .sort((a, b) => Math.abs(Date.parse(a.startAt) - start) - Math.abs(Date.parse(b.startAt) - start))
-        .slice(0, 3)
-        .map((s) => `${s.time}${s.master ? ` with ${s.master}` : ''}${locationWasAsked ? '' : ` at ${s.studio}`}`);
-    return {
-        blocked: 'slot_taken',
-        message: nearest.length
-            ? `${slot.time} was just taken. Offer these instead.`
-            : `${slot.time} was just taken and nothing else is open that day. Offer to check another day.`,
-        openTimes: nearest,
-    };
-}
-
 function sellerNote(state: CallState): string {
     const parts = ['Booked by phone assistant.'];
     if (state.request) parts.push(`Request: ${state.request}.`);
-    if (state.design && state.design !== 'none') {
-        const label = state.design === 'custom_request' ? 'to be confirmed by the studio' : `level ${state.design}`;
-        parts.push(`Design: ${state.designDescription ?? 'custom'} (${label}); not included in this booking's time or price.`);
+    if (state.design === 'custom_request') {
+        parts.push(`Design: ${state.designDescription ?? 'custom'} (to be confirmed by the studio); not included in this booking's time or price.`);
+    } else if (state.design && state.design !== 'none') {
+        parts.push(`Design: ${state.designDescription ?? state.design} (level ${state.design}).`);
     }
-    if (state.addons?.length) {
-        parts.push(`Add-ons: ${addonWords(state.addons)}; not included in this booking's time or price.`);
-    }
+    if (state.addons?.length) parts.push(`Add-ons: ${addonWords(state.addons)}.`);
     if (state.notes.length) parts.push(`Notes: ${state.notes.join('; ')}.`);
     return parts.join(' ');
 }

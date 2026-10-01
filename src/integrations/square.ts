@@ -241,22 +241,25 @@ export interface SquareAvailability {
 }
 
 /**
- * Free start times for one variation at one location. Without teamMemberIds
- * Square returns one team member per start time, not everyone who is free.
- * The range must be in the future and at most ~31 days.
+ * Free start times at one location for services done back to back, in order.
+ * Square takes each service's duration from the catalog and returns only starts
+ * where the whole run fits. Without teamMemberIds it returns one team member per
+ * start time, not everyone who is free. The range must be in the future and at
+ * most ~31 days.
  */
 export async function searchAvailability(input: {
-    locationId: string; startAt: string; endAt: string; serviceVariationId: string; teamMemberIds?: string[];
+    locationId: string; startAt: string; endAt: string;
+    segments: { serviceVariationId: string; teamMemberIds?: string[] }[];
 }): Promise<SquareAvailability[]> {
     const r = await call<{ availabilities?: SquareAvailability[] }>('POST', '/bookings/availability/search', {
         query: {
             filter: {
                 start_at_range: { start_at: input.startAt, end_at: input.endAt },
                 location_id: input.locationId,
-                segment_filters: [{
-                    service_variation_id: input.serviceVariationId,
-                    ...(input.teamMemberIds ? { team_member_id_filter: { any: input.teamMemberIds } } : {}),
-                }],
+                segment_filters: input.segments.map((s) => ({
+                    service_variation_id: s.serviceVariationId,
+                    ...(s.teamMemberIds ? { team_member_id_filter: { any: s.teamMemberIds } } : {}),
+                })),
             },
         },
     });
@@ -273,16 +276,20 @@ export interface SquareBooking {
     customer_id?: string;
 }
 
-/** One-segment appointment. The idempotency key must be stable across retries. */
+export interface BookingSegment {
+    teamMemberId: string;
+    serviceVariationId: string;
+    serviceVariationVersion: number;
+    durationMinutes: number;
+}
+
+/** One appointment of one or more services back to back. The idempotency key must be stable across retries. */
 export async function createBooking(input: {
     idempotencyKey: string;
     startAt: string;
     locationId: string;
     customerId: string;
-    teamMemberId: string;
-    serviceVariationId: string;
-    serviceVariationVersion: number;
-    durationMinutes: number;
+    segments: BookingSegment[];
     sellerNote?: string;
 }): Promise<SquareBooking> {
     const r = await call<{ booking: SquareBooking }>('POST', '/bookings', {
@@ -293,12 +300,12 @@ export async function createBooking(input: {
             location_type: 'BUSINESS_LOCATION',
             customer_id: input.customerId,
             ...(input.sellerNote ? { seller_note: input.sellerNote } : {}),
-            appointment_segments: [{
-                team_member_id: input.teamMemberId,
-                service_variation_id: input.serviceVariationId,
-                service_variation_version: input.serviceVariationVersion,
-                duration_minutes: input.durationMinutes,
-            }],
+            appointment_segments: input.segments.map((s) => ({
+                team_member_id: s.teamMemberId,
+                service_variation_id: s.serviceVariationId,
+                service_variation_version: s.serviceVariationVersion,
+                duration_minutes: s.durationMinutes,
+            })),
         },
     });
     return r.booking;
