@@ -66,7 +66,6 @@ export const squareBookTool = defineTool({
         return {
             booked: true,
             status: pending ? 'pending' : 'confirmed',
-            confirmation: readBack(state),
             ...(pending ? { message: 'The studio still has to accept it; say they will confirm shortly.' } : {}),
         };
     },

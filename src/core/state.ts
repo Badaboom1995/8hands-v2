@@ -162,9 +162,9 @@ function missingForBooking(s: CallState): string[] {
     need('extensionsType', s.area === 'extensions');
     need('extensionsLength', s.area === 'extensions' && s.extensionsType === 'new_set');
     need('location');
-    need('customerPhone'); // asked every call for now, even with caller ID
-    need('firstVisit', s.customer?.status === 'not_found' && s.customerPhone !== undefined);
-    need('level'); // a named master with one level fills it in
+    need('customerPhone', !s.callerPhone); // hidden caller ID: ask for the number
+    need('firstVisit', s.customer?.status === 'not_found');
+    need('level', !s.master); // a named master's level is theirs
     need('design', s.area === 'extensions' || s.finish === 'gel' || s.finish === 'regular');
     need('date');
     need('service');

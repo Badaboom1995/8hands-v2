@@ -49,6 +49,8 @@ export interface BusinessProfile {
         /** "{level}" is replaced by the level name. */
         level: string;
     };
+    /** Said word for word once the booking is made; the caller already heard the details in the read-back. */
+    booked: string;
     /** Said word for word when the caller asks how the technician levels differ. */
     levelDifference: string;
     /** Design add-on levels with the caller-facing descriptors that identify each. */
@@ -68,9 +70,10 @@ export interface BusinessProfile {
     notOffered: string;
     /**
      * Technician levels and the catalog words that mark them in service or option
-     * names, most specific first ("TOP MASTER" is Top, not Master).
+     * names, most specific first ("TOP MASTER" is Top, not Master). rank: higher is
+     * the higher level, for a master listed on several.
      */
-    levels: { name: string; words: string[] }[];
+    levels: { name: string; words: string[]; rank: number }[];
     /** Provider locations the agent books for, by name. Others (e.g. a default test location) are ignored. */
     studios: string[];
 }
@@ -104,6 +107,7 @@ export const ZORINA: BusinessProfile = {
         length: { short: 'short', medium: 'medium', long: 'long' },
         level: '{level} level',
     },
+    booked: 'Done, you\'re all set. Thank you for calling!',
     levelDifference: 'The higher the level, the more experienced the technician: the appointment is faster '
         + 'and costs a bit more. Complex designs are done by our Top technicians.',
     // From the Square "Designs" item descriptions.
@@ -140,9 +144,9 @@ export const ZORINA: BusinessProfile = {
     // The workflow doc says no Gel-X; the v1 config says treat it as extensions. Ask Anastasia.
     notOffered: 'Gel-X',
     levels: [
-        { name: 'Top', words: ['top'] },
-        { name: 'Junior', words: ['junior'] },
-        { name: 'Master', words: ['master'] },
+        { name: 'Top', words: ['top'], rank: 3 },
+        { name: 'Junior', words: ['junior'], rank: 1 },
+        { name: 'Master', words: ['master'], rank: 2 },
     ],
     studios: ['Pacific Avenue', 'Union Street'],
 };

@@ -11,7 +11,7 @@ import { EnrollmentError, normalizePhone } from './enrollment';
 /** Business policy; moves to business config. On unless REQUIRE_CARD_ON_FILE=false. */
 export const requireCard = () => process.env.REQUIRE_CARD_ON_FILE !== 'false';
 
-/** Phones/emails a returning caller may try, the first number they gave included, before a human takes over. */
+/** Phones/emails a returning caller may try, the first number (caller ID or given) included, before a human takes over. */
 const MAX_IDENTIFY_ATTEMPTS = 3;
 
 async function match(customers: square.SquareCustomer[], via: CustomerMatch['via']): Promise<CustomerMatch> {
@@ -35,7 +35,10 @@ export async function identifyByEmail(raw: string): Promise<CustomerMatch> {
 export function startCallerLookup(state: CallState): void {
     if (!state.callerPhone) return;
     state.customerLookup = identifyByPhone(state.callerPhone, 'caller_id')
-        .then((m) => { state.customer ??= m; })
+        .then((m) => {
+            state.customer ??= m;
+            state.identifyAttempts = (state.identifyAttempts ?? 0) + 1;
+        })
         .catch((err) => { console.warn('[identify] caller ID lookup failed:', (err as Error).message); });
 }
 
@@ -97,7 +100,7 @@ export async function customerGate(state: CallState, opts: { live?: boolean } = 
 
     // Not found (or no caller ID).
     if (!state.callerPhone && !state.customerPhone && !state.customerEmail) {
-        return { blocked: 'phone', message: 'Ask for the caller\'s phone number and save it as customerPhone.' };
+        return { blocked: 'phone', message: `Ask "${BUSINESS.questions.phone}" and confirm it as in step 4.` };
     }
     if (state.firstVisit === true) {
         if (!requireCard()) {

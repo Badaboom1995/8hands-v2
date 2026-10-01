@@ -232,9 +232,10 @@ allowed. Checked 2026-09-23:
 - Availability search without a staff filter returns one staff member per start time,
   not every free staff member. Results are UTC; `service_variation_version` must be
   passed back on CreateBooking. Availability and list-bookings ranges cap at 31 days.
-- Customers (4): Aleksei Belov `+14155550123` (VISA on file), Maya Test `+14155550199`
-  (VISA on file), and "E2E Test Client" ×2 on `+14155550188` (a duplicate on purpose,
-  no cards). No bookings in Sept 2026.
+- Customers (5): Aleksei Belov `+14155550123` (VISA on file), Maya Test `+14155550199`
+  (VISA on file), Alex Test 1 `+14155550112` (card on file, made by an enrollment test),
+  and "E2E Test Client" ×2 on `+14155550188` (a duplicate on purpose, no cards).
+  `+14155550100` and `+14155550177` match no one. No bookings in Sept 2026.
 
 Conventions:
 - `bun run typecheck` clean before commit.

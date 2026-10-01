@@ -8,38 +8,64 @@ import { BUSINESS } from '../../business';
 import type { CallState } from '../../core/state';
 import { defineTool } from '../../core/tools';
 import {
-    listBookableTeam, listServiceItems, type SquareLocation, type SquareServiceItem, type SquareTeamMember,
+    listBookableTeam, listServiceItems, searchAvailability, SquareError,
+    type SquareLocation, type SquareServiceItem, type SquareTeamMember,
 } from '../../integrations/square';
 import { groupServices, listStudios, matchByName, normalize, staffNames } from './shared';
 
 export interface Master {
     name: string;
+    /** Served studios where Square has open times for them; see availableStudios. */
     studios: string[];
-    levels: string[];
+    /** Their level: from their own option ("TOP Esther"), else the highest they are listed on. */
+    level?: string;
     services: string[];
 }
 
+/** Server-only: the team member and one option they do, to ask Square where they work. */
+interface MasterRecord extends Master {
+    id: string;
+    /** Their own option if they have one, else one at their level. */
+    probeVariationId?: string;
+}
+
+const STUDIO_WINDOW_DAYS = 14;
+
 /** Every bookable master who performs at least one service at a served studio, live from Square. */
-export async function loadMasters(): Promise<Master[]> {
+async function loadRecords(): Promise<{ records: MasterRecord[]; studios: SquareLocation[] }> {
     const [team, items, studios] = await Promise.all([listBookableTeam(), listServiceItems(), listStudios()]);
     const services = groupServices(items);
     const names = staffNames(team);
-    return team
+    const records = team
         .map((m) => ({
+            id: m.id,
             name: names.get(m.id)!,
-            studios: studiosOf(m, studios),
-            levels: levelsOf(m.id, items),
+            studios: assignedStudios(m, studios),
+            ...levelOf(m.id, names.get(m.id)!, items),
             services: services
                 .filter((s) => s.variations.some((v) => v.item_variation_data?.team_member_ids?.includes(m.id)))
                 .map((s) => s.name),
         }))
         .filter((m) => m.services.length > 0 && m.studios.length > 0);
+    return { records, studios };
 }
 
-/** Masters matching a name the caller said; several matches are different people. */
+const toMaster = ({ name, studios, level, services }: MasterRecord): Master => ({ name, studios, level, services });
+
+/** Every master, with studios from assignments (cheap; names only are shown). */
+export async function loadMasters(): Promise<Master[]> {
+    return (await loadRecords()).records.map(toMaster);
+}
+
+/**
+ * Masters matching a name the caller said; several matches are different people.
+ * Their studios come from Square availability, which is the truth; assignments are not.
+ */
 export async function findMasters(name: string): Promise<{ found: Master[]; all: Master[] }> {
-    const all = await loadMasters();
-    return { found: matchByName(name, all, (m) => m.name), all };
+    const { records, studios } = await loadRecords();
+    const found = await Promise.all(matchByName(name, records, (m) => m.name)
+        .map(async (m) => ({ ...m, studios: await availableStudios(m, studios) })));
+    return { found: found.map(toMaster), all: records.map(toMaster) };
 }
 
 export const squareMastersTool = defineTool({
@@ -65,31 +91,65 @@ export const squareMastersTool = defineTool({
         return {
             masters: found,
             ...(found.length > 1 ? { note: 'These are different people. Ask which studio narrows it to one.' } : {}),
-            ...(found.some((m) => m.levels.length > 1)
-                ? { levelNote: 'A master with several levels: ask the level question as usual.' } : {}),
         };
     },
 });
 
-/** Served studios the master is assigned to in Square. Availability is the final word on a given day. */
-function studiosOf(m: SquareTeamMember, studios: SquareLocation[]): string[] {
+/** Served studios the master is assigned to in Square. Often wrong; only a fallback and a filter. */
+function assignedStudios(m: SquareTeamMember, studios: SquareLocation[]): string[] {
     const a = m.assigned_locations;
     if (!a || a.assignment_type === 'ALL_CURRENT_AND_FUTURE_LOCATIONS') return studios.map((l) => l.name);
     return studios.filter((l) => a.location_ids?.includes(l.id)).map((l) => l.name);
 }
 
-/** Levels from the service and option names this master is listed on, per the business's level words. */
-function levelsOf(memberId: string, items: SquareServiceItem[]): string[] {
-    const found = new Set<string>();
+/**
+ * Served studios where Square has open times for the master in the next two
+ * weeks. None anywhere (fully booked, or off): their assigned studios.
+ */
+async function availableStudios(m: MasterRecord, studios: SquareLocation[]): Promise<string[]> {
+    if (!m.probeVariationId) return m.studios;
+    const startAt = new Date(Date.now() + 60_000).toISOString();
+    const endAt = new Date(Date.now() + STUDIO_WINDOW_DAYS * 86_400_000).toISOString();
+    const open = await Promise.all(studios.map(async (l) => {
+        try {
+            const found = await searchAvailability({
+                locationId: l.id, startAt, endAt,
+                segments: [{ serviceVariationId: m.probeVariationId!, teamMemberIds: [m.id] }],
+            });
+            return found.length > 0;
+        } catch (err) {
+            if (err instanceof SquareError && err.status === 400) return false; // they don't work here
+            throw err;
+        }
+    }));
+    const names = studios.filter((_, i) => open[i]).map((l) => l.name);
+    return names.length ? names : m.studios;
+}
+
+/**
+ * The master's level. Their own option ("TOP Esther", "MASTER Gina") names it;
+ * without one, the highest level among the options they are listed on. Also an
+ * option of that kind, to look up where they work.
+ */
+function levelOf(memberId: string, name: string, items: SquareServiceItem[]): { level?: string; probeVariationId?: string } {
+    const own = new Map<string, string>();
+    const listed = new Map<string, string>();
+    const first = normalize(name).split(' ')[0]!;
     for (const item of items) {
         for (const v of item.item_data?.variations ?? []) {
             if (!v.item_variation_data?.team_member_ids?.includes(memberId)) continue;
             const words = normalize(`${item.item_data?.name ?? ''} ${v.item_variation_data?.name ?? ''}`).split(' ');
             const level = BUSINESS.levels.find((l) => l.words.some((w) => words.includes(w)));
-            if (level) found.add(level.name);
+            if (!level) continue;
+            if (!listed.has(level.name)) listed.set(level.name, v.id);
+            if (words.includes(first) && !own.has(level.name)) own.set(level.name, v.id);
         }
     }
-    return BUSINESS.levels.map((l) => l.name).filter((n) => found.has(n));
+    const highest = (found: Map<string, string>) => BUSINESS.levels
+        .filter((l) => found.has(l.name))
+        .sort((a, b) => b.rank - a.rank)
+        .map((l) => ({ level: l.name, probeVariationId: found.get(l.name) }))[0];
+    return highest(own) ?? highest(listed) ?? {};
 }
 
 const sameStudio = (a: string, b: string) => matchByName(a, [b], (x) => x).length > 0;
@@ -126,7 +186,13 @@ export async function resolveNamedMaster(state: CallState): Promise<
 
     const m = matches[0]!;
     state.master = m.name;
-    const masterInfo = { name: m.name, studios: m.studios, levels: m.levels };
+    const masterInfo = { name: m.name, studios: m.studios, level: m.level };
+    const saved: string[] = [];
+    // A named master's level is theirs; the caller is never asked.
+    if (m.level && state.level !== m.level) {
+        state.level = m.level;
+        saved.push('level');
+    }
     if (wanted && !m.studios.some((s) => sameStudio(wanted, s))) {
         return {
             blocked: 'master',
@@ -134,14 +200,9 @@ export async function resolveNamedMaster(state: CallState): Promise<
             masterInfo,
         };
     }
-    const saved: string[] = [];
     if (m.studios.length === 1 && !wanted) {
         state.location = m.studios[0];
         saved.push('location');
-    }
-    if (m.levels.length === 1 && !state.level) {
-        state.level = m.levels[0];
-        saved.push('level');
     }
     return { saved, masterInfo };
 }

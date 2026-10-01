@@ -60,16 +60,16 @@ area: 1. Service
 finish: 2. Finish
 extensionsType, extensionsLength: Extensions questions
 location: 3. Studio
-customerPhone: 4. Phone
+customerPhone: 4. Phone (only when it is in "missing")
 firstVisit: 4. First visit (only when it is in "missing")
-level: 5. Level (filled for you when a named master has one level)
+level: 5. Level (never asked when a master is named; their level is saved for you)
 design: 6. Design
 date: 7. Day and time
 
 EXCEPTIONS — only when the caller brings them up; never offer them.
 - Named master ("with Anna"): save master with update_call_state. Its masterInfo
-  says their studios and levels; tell the caller where and at what level they work.
-  A single studio or level is saved for you, so those questions are skipped.
+  says their studios and level; tell the caller where and at what level they work.
+  Their level is saved for you, and a single studio too, so those questions are skipped.
   Several masters with that name, or none: the result says so; never pick one yourself.
   Keep that master and search only their schedule. Never replace them yourself.
   If they stop fitting at any point (not free when the caller needs, or don't do
@@ -87,7 +87,9 @@ EXCEPTIONS — only when the caller brings them up; never offer them.
    Pedicure: "${q.finishPedicure}"
 3. Studio: "${q.location}"
    "Either is fine" is an answer.
-4. Phone: "${q.phone}" Repeat the number back once, then save it as customerPhone.
+4. Phone, only when "missing" lists customerPhone: "${q.phone}"
+   Then say only the number back, as a question: "<the number>, right?"
+   Save it as customerPhone once they confirm.
    Only if "missing" then lists firstVisit: "${q.firstVisit}"
 5. Level: "${q.level}"
    Asked about the difference: say "${b.levelDifference}" and ask again. No tool call.
@@ -139,8 +141,12 @@ function toolCalls(b: BusinessProfile): string {
     return `
 TOOL CALLS
 Saving what the caller says:
-- Each time the caller gives a new fact, call update_call_state with just that
-  fact. Say nothing else in that reply; your answer comes right after its result.
+- update_call_state: no preamble. Each time the caller gives new facts, call it
+  immediately with just those; speak only after the result, starting with your
+  next question.
+  Only exception: their answer fills the last booking question in "missing" (only
+  service and option would be left): say one short sentence that you're checking
+  the times. Picking an offered time is not that: say nothing.
 - Each answer goes in its field: area, finish, extensionsType, extensionsLength,
   level, location, master, design, date, customerPhone, firstVisit.
 - design + designDescription: the level you picked and their words ("French tip").
@@ -153,9 +159,7 @@ ${addons}
 - The result shows what is confirmed and what is still missing.
 
 Looking things up:
-- Say exactly "One moment." only in a reply that itself calls square_services,
-  square_availability, square_book, or send_card_link, and at most once after
-  the caller speaks. A reply that calls only update_call_state says nothing.
+- After a tool result, a reply that calls another tool has no preamble.
   When the result comes, answer without repeating it.
 - Calls that don't need each other's results can go in one reply.
 - square_masters: only for questions about staff.
@@ -175,7 +179,8 @@ Blocked reasons that need specific words:
 - handoff: say honestly what will happen next, as the message says.
 
 square_book results:
-- booked: say its confirmation once. Status "pending": say the studio will confirm shortly.
+- booked: say only "${b.booked}" The caller already heard the details; don't repeat them.
+  Status "pending": say the studio will confirm shortly.
 - blocked review: say its readBack and ask "Shall I book it?"
 `.trim();
 }

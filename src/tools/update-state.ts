@@ -12,13 +12,14 @@ import { recheckSlot } from './square/research';
 export const updateCallStateTool = defineTool({
     name: 'update_call_state',
     description:
-        'Save what the caller just told you. A reply that calls only this tool says nothing; '
-        + 'answer after the result. '
+        'Save what the caller just told you. No preamble: call it immediately and speak only after '
+        + 'the result (except the "checking the times" sentence in TOOL CALLS). '
         + 'Send only changed fields. Returns confirmed and missing, plus readBack or blocked.',
     args: CallStatePatch,
     mode: 'silent',
     handler: async (patch, ctx) => {
         const state = ctx.state;
+        await state.customerLookup; // caller ID result, so "missing" knows whether to ask phone or first visit
         const { time, ...facts } = patch;
         const before = state.slot;
         const saved = applyPatch(state, facts);
@@ -58,10 +59,10 @@ export const updateCallStateTool = defineTool({
             saved.push(...bound.changed.filter((k) => !saved.includes(k)));
         }
 
-        // Who the caller is is settled early (after the studio): a phone with no
-        // profile, or a returning client not found, gets its next question now.
-        // The card itself is checked at the read-back.
-        if (['customerPhone', 'customerEmail', 'firstVisit'].some((k) => saved.includes(k)) && !needsReadBack(state)) {
+        // Who the caller is is settled early, from the studio on: no number, a number
+        // with no profile, a returning client not found, or duplicates get their next
+        // step now. The card itself is checked at the read-back.
+        if (['location', 'customerPhone', 'customerEmail', 'firstVisit'].some((k) => saved.includes(k)) && !needsReadBack(state)) {
             const gate = await customerGate(state);
             if ('blocked' in gate && gate.blocked !== 'card') return { ...gate, saved, ...describeState(state) };
         }
