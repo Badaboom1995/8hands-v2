@@ -3,7 +3,7 @@
 // are done. Server only; the model sees labels, totals and times.
 
 import { BUSINESS, type CatalogRef } from '../../business';
-import type { CallState } from '../../core/state';
+import { serviceWords, type CallState } from '../../core/state';
 import { listServiceItems, type SquareVariation } from '../../integrations/square';
 import { groupServices, matchByName, minutes, optionName, price, type Service } from './shared';
 
@@ -80,7 +80,7 @@ export async function composeAppointment(state: CallState, services?: Service[])
     for (const a of addons.filter((x) => x.ref.before)) part('addon', addonLabel(a.key), a.ref);
 
     if (state.service) {
-        part('main', state.request ?? state.service, { service: state.service, option: state.option });
+        part('main', serviceWords(state) ?? state.service, { service: state.service, option: state.option });
     } else {
         problems.push({ role: 'main', label: 'main service', message: 'not chosen yet (service/option empty)' });
     }

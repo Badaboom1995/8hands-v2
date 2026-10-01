@@ -32,9 +32,22 @@ export interface BusinessProfile {
         extensionsType: string;
         extensionsLength: string;
         location: string;
+        phone: string;
+        firstVisit: string;
         level: string;
         design: string;
         day: string;
+    };
+    /**
+     * How the main service is said in a read-back, from area, finish, extensions
+     * length and level: "Gel manicure, Master level", "Long extensions, Top level".
+     */
+    serviceWords: {
+        area: Record<'manicure' | 'pedicure' | 'extensions', string>;
+        finish: Record<'gel' | 'regular' | 'none', string>;
+        length: Record<'short' | 'medium' | 'long', string>;
+        /** "{level}" is replaced by the level name. */
+        level: string;
     };
     /** Said word for word when the caller asks how the technician levels differ. */
     levelDifference: string;
@@ -78,9 +91,18 @@ export const ZORINA: BusinessProfile = {
         extensionsType: 'Would you like a refill, or are you looking for a new set?',
         extensionsLength: 'What length would you like — short, medium, or long?',
         location: 'Which location works best for you — Union Street or Pacific Avenue?',
+        phone: 'What phone number should I put the appointment under?',
+        // v1 playbook visit_status, word for word.
+        firstVisit: 'Have you been to us before, or is this your first visit?',
         level: 'Which level of technician would you like — Junior, Master, or Top?',
         design: 'Would you like to add a nail design, or is there anything special you\'d like?',
         day: 'What day and time would work for you?',
+    },
+    serviceWords: {
+        area: { manicure: 'manicure', pedicure: 'pedicure', extensions: 'extensions' },
+        finish: { gel: 'gel', regular: 'regular polish', none: 'no-color' },
+        length: { short: 'short', medium: 'medium', long: 'long' },
+        level: '{level} level',
     },
     levelDifference: 'The higher the level, the more experienced the technician: the appointment is faster '
         + 'and costs a bit more. Complex designs are done by our Top technicians.',

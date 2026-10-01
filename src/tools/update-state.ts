@@ -12,8 +12,8 @@ import { recheckSlot } from './square/research';
 export const updateCallStateTool = defineTool({
     name: 'update_call_state',
     description:
-        'Save what the caller just told you. In that reply say nothing, except "Okay, let me check that for you." '
-        + 'if a lookup follows; answer after the result. '
+        'Save what the caller just told you. A reply that calls only this tool says nothing; '
+        + 'answer after the result. '
         + 'Send only changed fields. Returns confirmed and missing, plus readBack or blocked.',
     args: CallStatePatch,
     mode: 'silent',
@@ -56,6 +56,14 @@ export const updateCallStateTool = defineTool({
             const bound = bindSlot(state, time);
             if ('blocked' in bound) return { ...bound, saved, ...describeState(state) };
             saved.push(...bound.changed.filter((k) => !saved.includes(k)));
+        }
+
+        // Who the caller is is settled early (after the studio): a phone with no
+        // profile, or a returning client not found, gets its next question now.
+        // The card itself is checked at the read-back.
+        if (['customerPhone', 'customerEmail', 'firstVisit'].some((k) => saved.includes(k)) && !needsReadBack(state)) {
+            const gate = await customerGate(state);
+            if ('blocked' in gate && gate.blocked !== 'card') return { ...gate, saved, ...describeState(state) };
         }
 
         // Before the caller hears a read-back, they must be a client we may book for.

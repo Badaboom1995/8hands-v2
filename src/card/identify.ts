@@ -3,6 +3,7 @@
 // on file. Runs in the background at call start, again when the caller gives
 // another phone or email, and last right before booking.
 
+import { BUSINESS } from '../business';
 import type { CallState, CustomerMatch } from '../core/state';
 import * as square from '../integrations/square';
 import { EnrollmentError, normalizePhone } from './enrollment';
@@ -10,8 +11,8 @@ import { EnrollmentError, normalizePhone } from './enrollment';
 /** Business policy; moves to business config. On unless REQUIRE_CARD_ON_FILE=false. */
 export const requireCard = () => process.env.REQUIRE_CARD_ON_FILE !== 'false';
 
-/** How many other phones/emails a returning caller may try before a human takes over. */
-const MAX_IDENTIFY_ATTEMPTS = 2;
+/** Phones/emails a returning caller may try, the first number they gave included, before a human takes over. */
+const MAX_IDENTIFY_ATTEMPTS = 3;
 
 async function match(customers: square.SquareCustomer[], via: CustomerMatch['via']): Promise<CustomerMatch> {
     if (customers.length === 0) return { status: 'not_found', via };
@@ -110,14 +111,13 @@ export async function customerGate(state: CallState, opts: { live?: boolean } = 
         }
         return {
             blocked: 'identify',
-            message: (state.identifyAttempts ? 'That did not find a profile either. ' : '')
+            message: ((state.identifyAttempts ?? 0) > 1 ? 'That did not find a profile either. ' : 'Say you could not find their profile under that number. ')
                 + 'Ask for another phone number or the email they used with us, and save it as customerPhone or customerEmail.',
         };
     }
     return {
         blocked: 'identify',
-        message: 'Tell the caller you could not find their profile under this number, and ask: '
-            + '"Have you been to us before, or is this your first visit?" Save the answer as firstVisit.',
+        message: `Ask exactly: "${BUSINESS.questions.firstVisit}" Save the answer as firstVisit.`,
     };
 }
 

@@ -74,7 +74,7 @@ let ws = null;
 let agentBubble = null;
 
 // Fields in the order the receptionist collects them.
-const STATE_FIELDS = ['intent', 'request', 'area', 'finish', 'extensionsType', 'extensionsLength', 'level', 'design', 'designDescription', 'addons', 'service', 'option', 'master', 'location', 'date', 'time', 'client', 'booking', 'firstVisit', 'customerPhone', 'customerEmail'];
+const STATE_FIELDS = ['intent', 'area', 'finish', 'extensionsType', 'extensionsLength', 'level', 'design', 'designDescription', 'addons', 'service', 'option', 'master', 'location', 'date', 'time', 'client', 'booking', 'firstVisit', 'customerPhone', 'customerEmail'];
 function renderState(state) {
   const dl = document.getElementById('state-fields');
   dl.innerHTML = '';

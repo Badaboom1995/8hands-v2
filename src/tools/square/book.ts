@@ -91,7 +91,6 @@ async function stillOpen(slot: Slot): Promise<boolean> {
 
 function sellerNote(state: CallState): string {
     const parts = ['Booked by phone assistant.'];
-    if (state.request) parts.push(`Request: ${state.request}.`);
     if (state.design === 'custom_request') {
         parts.push(`Design: ${state.designDescription ?? 'custom'} (to be confirmed by the studio); not included in this booking's time or price.`);
     } else if (state.design && state.design !== 'none') {

@@ -21,8 +21,6 @@ export const CallStatePatch = z.object({
     // field is in the prompt (TOOL CALLS, SKIP RULES). Every token here is sent
     // on every request.
     intent: z.enum(['book', 'question', 'reschedule', 'cancel', 'other']).optional(),
-    request: z.string().min(1).optional()
-        .describe('What they want, in plain words; resend whole as it grows.'),
     area: z.enum(['manicure', 'pedicure', 'extensions']).optional(),
     finish: z.enum(['gel', 'regular', 'none']).optional().describe('none = no color.'),
     extensionsType: z.enum(['refill', 'new_set']).optional(),
@@ -50,7 +48,6 @@ export type CallStatePatch = z.infer<typeof CallStatePatch>;
 
 export interface CallState {
     intent?: CallStatePatch['intent'];
-    request?: string;
     area?: CallStatePatch['area'];
     finish?: CallStatePatch['finish'];
     extensionsType?: CallStatePatch['extensionsType'];
@@ -165,6 +162,8 @@ function missingForBooking(s: CallState): string[] {
     need('extensionsType', s.area === 'extensions');
     need('extensionsLength', s.area === 'extensions' && s.extensionsType === 'new_set');
     need('location');
+    need('customerPhone'); // asked every call for now, even with caller ID
+    need('firstVisit', s.customer?.status === 'not_found' && s.customerPhone !== undefined);
     need('level'); // a named master with one level fills it in
     need('design', s.area === 'extensions' || s.finish === 'gel' || s.finish === 'regular');
     need('date');
@@ -311,7 +310,7 @@ export function fingerprint(state: CallState): string | undefined {
     if (!s) return undefined;
     return [
         s.startAt, s.ref.locationId, ...s.ref.segments.map((x) => `${x.teamMemberId}:${x.serviceVariationId}`),
-        state.request ?? '', state.design ?? '', state.designDescription ?? '', (state.addons ?? []).join(','),
+        state.design ?? '', state.designDescription ?? '', (state.addons ?? []).join(','),
     ].join('|');
 }
 
@@ -319,12 +318,24 @@ export function fingerprint(state: CallState): string | undefined {
 export function readBack(state: CallState): string | undefined {
     const s = state.slot;
     if (!s) return undefined;
-    const what = state.request ? state.request[0]!.toUpperCase() + state.request.slice(1) : 'Your appointment';
+    const service = serviceWords(state);
+    const what = service ? service[0]!.toUpperCase() + service.slice(1) : 'Your appointment';
     const design = state.design && state.design !== 'none'
         ? `, ${state.designDescription ?? 'custom'} design${state.design === 'custom_request' ? ' (the studio will confirm it)' : ''}`
         : '';
     const addons = state.addons?.length ? `, plus ${addonWords(state.addons)}` : '';
     return `${what}${design}${addons}${s.master ? `${addons ? ',' : ''} with ${s.master}` : ''}, ${s.day} at ${s.time}, ${s.studio}${s.price ? `, ${s.price}` : ''}.`;
+}
+
+/** The main service from confirmed facts, as the business says it: "gel manicure, Master level". */
+export function serviceWords(state: CallState): string | undefined {
+    if (!state.area) return undefined;
+    const w = BUSINESS.serviceWords;
+    const kind = state.area === 'extensions'
+        ? [state.extensionsLength && w.length[state.extensionsLength], w.area.extensions]
+        : [state.finish && w.finish[state.finish], w.area[state.area]];
+    const what = kind.filter(Boolean).join(' ');
+    return state.level ? `${what}, ${w.level.replace('{level}', state.level)}` : what;
 }
 
 /** "hand spa and acrylic or dip removal", as the business says them. */
@@ -334,7 +345,7 @@ export function addonWords(keys: string[]): string {
 }
 
 /**
- * If the slot or request changed since the caller last heard a read-back,
+ * If the slot or what it is for changed since the caller last heard a read-back,
  * return a fresh one and remember it as heard.
  */
 export function freshReadBack(state: CallState): string | undefined {
@@ -368,6 +379,6 @@ export function describeState(state: CallState): { confirmed: Record<string, unk
     }
 
     const booking = state.intent === 'book' || state.intent === 'reschedule'
-        || state.area !== undefined || state.request !== undefined;
+        || state.area !== undefined;
     return { confirmed, missing: booking ? missingForBooking(state) : [] };
 }
