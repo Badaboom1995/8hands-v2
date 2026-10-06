@@ -200,7 +200,13 @@ In this repo:
 
 - Runtime: **Bun** (no Node, no tsx). TypeScript, ESM, strict.
 - Voice: OpenAI Realtime API over WebSocket (`ws`); Twilio media streams next.
-- Everything else (DB, hosting, queue, eval harness): decide and write here.
+- Hosting: **Railway**, project `8hands-agent`, service `agent`, deploys on every push to
+  `main` of `Badaboom1995/8hands-v2` (`railway.json`: `bun src/server.ts`, health `/health`,
+  1 replica). Public URL `https://agent-production-e6c4.up.railway.app` (= `PUBLIC_BASE_URL`).
+  Server listens on `PORT` (Railway) else `AGENT_V2_PORT`. Env vars live in Railway
+  (`railway variables --service agent`). Enrollment sessions and stream tokens are in memory:
+  keep one replica, and a redeploy drops live calls.
+- Everything else (DB, queue, eval harness): decide and write here.
 
 ```bash
 bun install
