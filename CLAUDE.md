@@ -183,7 +183,8 @@ In this repo:
     with a one-time token and `From` as stream parameters. `codecs/twilio.ts` passes μ-law
     through (session runs `audio/pcmu`), sends `clear` on barge-in. `attachCall` starts the
     session on the stream's `start` event (`codec.waitsForStart`), where caller ID arrives.
-    Local dev: `ngrok http 3100`, number's "A call comes in" webhook → `https://<ngrok>/twilio/voice`.
+    Number `+1 424 383 6254` → Railway `/twilio/voice`. Local dev: `ngrok http 3100` and repoint
+    the number's "A call comes in" webhook to `https://<ngrok>/twilio/voice` (then back).
     Trial account: calls only from verified numbers, plays a trial notice + "press any key" first.
   - `card/enrollment.ts` — card-on-file gate and enrollment sessions (in memory, 30 min,
     hashed one-time token). `lookupCardOnFile(phone)` → none | one{hasCard} | ambiguous.
