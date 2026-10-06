@@ -16,11 +16,17 @@ export type InboundMsg =
     | { kind: 'audio'; data: string }
     /** Test UI: price and time the appointment in call state. */
     | { kind: 'calculate' }
+    /** The phone line is up (Twilio `start`); carries the caller ID. */
+    | { kind: 'start'; callerPhone?: string }
+    /** Not a call we accept: hang up. */
+    | { kind: 'reject'; reason: string }
     | { kind: 'ignore' };
 
 // One codec instance per connection (may hold per-call state, e.g. Twilio's streamSid).
 // Each encoder returns a wire frame for that client, or null to skip the event.
 export interface CallCodec {
+    /** Start the session on the first `start` message, not on connect (caller ID arrives there). */
+    waitsForStart?: boolean;
     decode(raw: string): InboundMsg;
     ready?(model: string): string | null;
     audio(base64Pcm: string): string | null;
@@ -36,31 +42,39 @@ export interface CallCodec {
 }
 
 export function attachCall(ws: WebSocket, codec: CallCodec, opts: AgentSessionOptions): void {
-    console.log('call started');
-
     const out = (frame: string | null | undefined): void => {
         if (frame && ws.readyState === WebSocket.OPEN) ws.send(frame);
     };
 
-    const session = new AgentSession(opts, {
-        onReady: () => out(codec.ready?.(opts.model)),
-        onAudio: (data) => out(codec.audio(data)),
-        onAgentTextDelta: (delta) => out(codec.agentTextDelta?.(delta)),
-        onUserTranscript: (text) => out(codec.userTranscript?.(text)),
-        onInterrupt: () => out(codec.interrupt()),
-        onTurnDone: () => out(codec.turnDone?.()),
-        onStats: (stats) => out(codec.stats?.(stats)),
-        onToolCall: (info) => out(codec.toolCall?.(info)),
-        onState: (state) => out(codec.state?.(state)),
-        onError: (message) => out(codec.error?.(message)),
-        onClose: () => {
-            if (ws.readyState === WebSocket.OPEN) ws.close();
-        },
-    });
+    let session: AgentSession | null = null;
+    const start = (callerPhone: string | undefined): AgentSession => {
+        console.log(`call started${callerPhone ? ` from ${callerPhone}` : ''}`);
+        return new AgentSession({ ...opts, callerPhone }, {
+            onReady: () => out(codec.ready?.(opts.model)),
+            onAudio: (data) => out(codec.audio(data)),
+            onAgentTextDelta: (delta) => out(codec.agentTextDelta?.(delta)),
+            onUserTranscript: (text) => out(codec.userTranscript?.(text)),
+            onInterrupt: () => out(codec.interrupt()),
+            onTurnDone: () => out(codec.turnDone?.()),
+            onStats: (stats) => out(codec.stats?.(stats)),
+            onToolCall: (info) => out(codec.toolCall?.(info)),
+            onState: (state) => out(codec.state?.(state)),
+            onError: (message) => out(codec.error?.(message)),
+            onClose: () => {
+                if (ws.readyState === WebSocket.OPEN) ws.close();
+            },
+        });
+    };
+    if (!codec.waitsForStart) session = start(opts.callerPhone);
 
     ws.on('message', (data) => {
         const msg = codec.decode(data.toString());
-        if (msg.kind === 'text') session.sendText(msg.text);
+        if (msg.kind === 'start') session ??= start(msg.callerPhone ?? opts.callerPhone);
+        else if (msg.kind === 'reject') {
+            console.warn(`call rejected: ${msg.reason}`);
+            ws.close();
+        } else if (!session) return;
+        else if (msg.kind === 'text') session.sendText(msg.text);
         else if (msg.kind === 'audio') session.sendAudio(msg.data);
         else if (msg.kind === 'calculate' && codec.calculation) {
             composeAppointment(session.state).then(
@@ -71,6 +85,7 @@ export function attachCall(ws: WebSocket, codec: CallCodec, opts: AgentSessionOp
     });
 
     ws.on('close', () => {
+        if (!session) return;
         console.log(`call ended: ${session.stats.summaryLine()}`);
         session.close();
     });

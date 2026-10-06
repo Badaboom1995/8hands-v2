@@ -178,6 +178,13 @@ In this repo:
     heard (fingerprint), after phone → one customer with a card → live re-check.
   - `tools/card-link.ts` — `send_card_link(email)`, starts card-on-file enrollment.
   - Caller ID: `AgentSessionOptions.callerPhone`; the browser test UI sends it as `/ws?phone=`.
+  - Twilio voice: `POST /twilio/voice` (signature-checked with `TWILIO_AUTH_TOKEN` against
+    `https://<Host>/twilio/voice`) returns TwiML `<Connect><Stream>` to `wss://<Host>/twilio/media`
+    with a one-time token and `From` as stream parameters. `codecs/twilio.ts` passes μ-law
+    through (session runs `audio/pcmu`), sends `clear` on barge-in. `attachCall` starts the
+    session on the stream's `start` event (`codec.waitsForStart`), where caller ID arrives.
+    Local dev: `ngrok http 3100`, number's "A call comes in" webhook → `https://<ngrok>/twilio/voice`.
+    Trial account: calls only from verified numbers, plays a trial notice + "press any key" first.
   - `card/enrollment.ts` — card-on-file gate and enrollment sessions (in memory, 30 min,
     hashed one-time token). `lookupCardOnFile(phone)` → none | one{hasCard} | ambiguous.
     `startEnrollment` sends the link (Resend if `RESEND_API_KEY`+`EMAIL_FROM`, else logs it);
@@ -206,7 +213,9 @@ Env vars live in a local `.env` (gitignored; Bun loads it automatically):
 `AGENT_V2_PORT` (default 3100), `AGENT_V2_DEBUG`, `SQUARE_ENVIRONMENT` (`sandbox`),
 `SQUARE_ACCESS_TOKEN`, `SQUARE_APPLICATION_ID` (Web Payments SDK), `SQUARE_LOCATION_ID`,
 `PUBLIC_BASE_URL` (link base for the card page), optional `RESEND_API_KEY` + `EMAIL_FROM`,
-`BUSINESS_NAME`, `REQUIRE_CARD_ON_FILE` (default on; `false` disables the card gate).
+`BUSINESS_NAME`, `REQUIRE_CARD_ON_FILE` (default on; `false` disables the card gate),
+`TWILIO_AUTH_TOKEN` (required for `/twilio/voice`; unsigned webhooks get 403), `TWILIO_ACCOUNT_SID`
+(REST API, e.g. setting a number's `VoiceUrl`; not used by the server yet).
 
 Square sandbox (base `https://connect.squareupsandbox.com/v2`): a copy of the Zorina
 catalog. Locations `Pacific Avenue` = `LT9W3A6W3QJ35`, `Union Street` = `L6A2FZ9VR8WY3`

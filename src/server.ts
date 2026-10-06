@@ -1,6 +1,6 @@
-// agent-v2 entry — routes only. Transport logic lives in transport.ts,
-// per-client dialects in codec-*.ts, agent logic in session.ts.
-// Run from repo root:  npx tsx agent-v2/server.ts   → http://localhost:3100
+// agent-v2 entry — routes only. Transport logic lives in core/transport.ts,
+// per-client dialects in codecs/, agent logic in core/session.ts.
+// Run:  bun run dev   → http://localhost:3100
 
 import fs from 'node:fs';
 import http from 'node:http';
@@ -10,6 +10,7 @@ import { WebSocketServer } from 'ws';
 import { completeEnrollment, EnrollmentError, getPublicSession, startEnrollment } from './card/enrollment';
 import { startCallerLookup } from './card/identify';
 import { browserCodec } from './codecs/browser';
+import { twilioCodec } from './codecs/twilio';
 import { GREETING_V2 as GREETING, instructionsV2 } from './instructions-v2';
 import { sendCardLinkTool } from './tools/card-link';
 import { squareAvailabilityTool } from './tools/square/availability';
@@ -18,10 +19,12 @@ import { squareMastersTool } from './tools/square/masters';
 import { squareServicesTool } from './tools/square/services';
 import { updateCallStateTool } from './tools/update-state';
 import { attachCall } from './core/transport';
+import { consumeStreamToken, issueStreamToken, streamTwiml, validTwilioSignature } from './integrations/twilio';
+import type { AgentSessionOptions } from './core/session';
 
 const API_KEY = process.env.OPENAI_API_KEY;
 const MODEL = process.env.OPENAI_REALTIME_MODEL || 'gpt-realtime-2.1';
-const PORT = Number(process.env.AGENT_V2_PORT || 3100);
+const PORT = Number(process.env.PORT || process.env.AGENT_V2_PORT || 3100);
 const DEBUG = Boolean(process.env.AGENT_V2_DEBUG);
 
 if (!API_KEY) {
@@ -40,6 +43,20 @@ function readJson(req: http.IncomingMessage): Promise<Record<string, unknown>> {
     });
 }
 
+function readForm(req: http.IncomingMessage): Promise<Record<string, string>> {
+    return new Promise((resolve, reject) => {
+        let raw = '';
+        req.on('data', (c) => { raw += c; if (raw.length > 64_000) reject(new Error('body too large')); });
+        req.on('end', () => resolve(Object.fromEntries(new URLSearchParams(raw))));
+        req.on('error', reject);
+    });
+}
+
+/** Host the caller reached us on (ngrok/proxy forward the public one). */
+function publicHost(req: http.IncomingMessage): string {
+    return String(req.headers['x-forwarded-host'] ?? req.headers.host ?? `localhost:${PORT}`);
+}
+
 function sendJson(res: http.ServerResponse, status: number, body: unknown): void {
     res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
     res.end(JSON.stringify(body));
@@ -53,8 +70,24 @@ function sendHtml(res: http.ServerResponse, file: string): void {
 const server = http.createServer(async (req, res) => {
     const url = req.url ?? '/';
     try {
+        if (req.method === 'GET' && url === '/health') return sendJson(res, 200, { ok: true });
         if (req.method === 'GET' && (url === '/' || url === '/index.html')) return sendHtml(res, 'index.html');
         if (req.method === 'GET' && url.startsWith('/card-on-file')) return sendHtml(res, 'card-on-file.html');
+
+        // Twilio: incoming call → stream its audio to /twilio/media.
+        if (req.method === 'POST' && url === '/twilio/voice') {
+            const params = await readForm(req);
+            const host = publicHost(req);
+            const signature = req.headers['x-twilio-signature'] as string | undefined;
+            if (!validTwilioSignature(`https://${host}${url}`, params, signature)) {
+                console.warn('[twilio] rejected webhook: bad or missing signature (check TWILIO_AUTH_TOKEN and the webhook URL)');
+                res.writeHead(403);
+                return res.end('forbidden');
+            }
+            console.log(`[twilio] incoming call ${params.CallSid} from ${params.From} to ${params.To}`);
+            res.writeHead(200, { 'content-type': 'text/xml' });
+            return res.end(streamTwiml(`wss://${host}/twilio/media`, { token: issueStreamToken(), from: params.From ?? '' }));
+        }
 
         // Card-on-file enrollment (public page ↔ server)
         if (req.method === 'POST' && url === '/api/card-enrollment/session') {
@@ -84,26 +117,36 @@ const server = http.createServer(async (req, res) => {
     }
 });
 
-const browserWss = new WebSocketServer({ server, path: '/ws' });
+const sessionOptions = (): Omit<AgentSessionOptions, 'audioFormat' | 'callerPhone'> => ({
+    apiKey: API_KEY,
+    model: MODEL,
+    instructions: instructionsV2(),
+    greeting: GREETING,
+    tools: [updateCallStateTool, squareServicesTool, squareMastersTool, squareAvailabilityTool, squareBookTool, sendCardLinkTool],
+    onCallStart: startCallerLookup,
+    debug: DEBUG,
+});
+
+const browserWss = new WebSocketServer({ noServer: true });
 browserWss.on('connection', (ws, req) => {
     // The browser test UI simulates caller ID with ?phone=.
     const callerPhone = new URL(req.url ?? '/', 'http://localhost').searchParams.get('phone') || undefined;
-    attachCall(ws, browserCodec(), {
-        apiKey: API_KEY,
-        model: MODEL,
-        instructions: instructionsV2(),
-        greeting: GREETING,
-        audioFormat: { type: 'audio/pcm', rate: 24000 },
-        tools: [updateCallStateTool, squareServicesTool, squareMastersTool, squareAvailabilityTool, squareBookTool, sendCardLinkTool],
-        callerPhone,
-        onCallStart: startCallerLookup,
-        debug: DEBUG,
-    });
+    attachCall(ws, browserCodec(), { ...sessionOptions(), audioFormat: { type: 'audio/pcm', rate: 24000 }, callerPhone });
 });
 
-// Later: a /twilio WebSocketServer here, attachCall(ws, twilioCodec(), {
-//     ...same options, audioFormat: { type: 'audio/pcmu' },
-// }) — plus the TwiML webhook.
+// Twilio Media Stream; caller ID comes in the stream's `start` event.
+const twilioWss = new WebSocketServer({ noServer: true });
+twilioWss.on('connection', (ws) => {
+    attachCall(ws, twilioCodec({ acceptToken: consumeStreamToken }), { ...sessionOptions(), audioFormat: { type: 'audio/pcmu' } });
+});
+
+// Several WebSocket servers on one HTTP server: route the upgrade by path.
+server.on('upgrade', (req, socket, head) => {
+    const pathname = new URL(req.url ?? '/', 'http://localhost').pathname;
+    const wss = pathname === '/ws' ? browserWss : pathname === '/twilio/media' ? twilioWss : null;
+    if (!wss) return socket.destroy();
+    wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
+});
 
 server.listen(PORT, () => {
     console.log(`agent-v2 web UI: http://localhost:${PORT} (model: ${MODEL})`);
