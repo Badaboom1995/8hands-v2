@@ -19,6 +19,7 @@ import { squareMastersTool } from './tools/square/masters';
 import { squareServicesTool } from './tools/square/services';
 import { updateCallStateTool } from './tools/update-state';
 import { attachCall } from './core/transport';
+import { hasPin, pinGateEnabled, pinPage, submitPin } from './http/pin-gate';
 import { consumeStreamToken, issueStreamToken, streamTwiml, validTwilioSignature } from './integrations/twilio';
 import type { AgentSessionOptions } from './core/session';
 
@@ -71,7 +72,22 @@ const server = http.createServer(async (req, res) => {
     const url = req.url ?? '/';
     try {
         if (req.method === 'GET' && url === '/health') return sendJson(res, 200, { ok: true });
-        if (req.method === 'GET' && (url === '/' || url === '/index.html')) return sendHtml(res, 'index.html');
+        if (req.method === 'GET' && (url === '/' || url === '/index.html')) {
+            if (!hasPin(req)) {
+                res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+                return res.end(pinPage());
+            }
+            return sendHtml(res, 'index.html');
+        }
+        if (req.method === 'POST' && url === '/pin') {
+            const error = submitPin(req, res, String((await readForm(req)).pin ?? ''));
+            if (error) {
+                res.writeHead(401, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+                return res.end(pinPage(error));
+            }
+            res.writeHead(303, { location: '/' });
+            return res.end();
+        }
         if (req.method === 'GET' && url.startsWith('/card-on-file')) return sendHtml(res, 'card-on-file.html');
 
         // Twilio: incoming call → stream its audio to /twilio/media.
@@ -104,6 +120,7 @@ const server = http.createServer(async (req, res) => {
         }
         // Dev helper until the agent tool exists: start a session and get the link.
         if (req.method === 'POST' && url === '/api/card-enrollment/start') {
+            if (!hasPin(req)) return sendJson(res, 401, { code: 'pin_required', message: 'PIN required' });
             const b = await readJson(req);
             return sendJson(res, 200, await startEnrollment({ phone: String(b.phone ?? ''), email: String(b.email ?? '') }));
         }
@@ -145,9 +162,12 @@ server.on('upgrade', (req, socket, head) => {
     const pathname = new URL(req.url ?? '/', 'http://localhost').pathname;
     const wss = pathname === '/ws' ? browserWss : pathname === '/twilio/media' ? twilioWss : null;
     if (!wss) return socket.destroy();
+    if (wss === browserWss && !hasPin(req)) {
+        return socket.end('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n');
+    }
     wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
 });
 
 server.listen(PORT, () => {
-    console.log(`agent-v2 web UI: http://localhost:${PORT} (model: ${MODEL})`);
+    console.log(`agent-v2 web UI: http://localhost:${PORT} (model: ${MODEL}, test page PIN ${pinGateEnabled ? 'on' : 'off'})`);
 });

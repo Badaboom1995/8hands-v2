@@ -206,7 +206,7 @@ function connect() {
   status.textContent = 'connecting…';
   callBtn.disabled = true;
   const phone = document.getElementById('phone').value.trim();
-  ws = new WebSocket(`ws://${location.host}/ws${phone ? `?phone=${encodeURIComponent(phone)}` : ''}`);
+  ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws${phone ? `?phone=${encodeURIComponent(phone)}` : ''}`);
   agentBubble = null;
 
   ws.onopen = () => { callBtn.disabled = false; };

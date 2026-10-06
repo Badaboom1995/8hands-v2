@@ -207,6 +207,9 @@ In this repo:
   Server listens on `PORT` (Railway) else `AGENT_V2_PORT`. Env vars live in Railway
   (`railway variables --service agent`). Enrollment sessions and stream tokens are in memory:
   keep one replica, and a redeploy drops live calls.
+- Test page PIN: `TEST_PAGE_PIN` (6 digits, set in Railway; unset locally = no gate) guards
+  `/`, `/ws`, and `/api/card-enrollment/start` via an HttpOnly cookie (`src/http/pin-gate.ts`).
+  Twilio, card-on-file, and `/health` routes stay public.
 - Everything else (DB, queue, eval harness): decide and write here.
 
 ```bash
