@@ -357,6 +357,8 @@ export class AgentSession {
                     input: {
                         format,
                         transcription: { model: 'gpt-4o-mini-transcribe' },
+                        // Filter background noise (salon music, dryers) before VAD and the model hear it.
+                        noise_reduction: { type: 'near_field' },
                         // Strict VAD: don't treat mic-startup clicks/hiss as a turn.
                         turn_detection: {
                             type: 'server_vad',
