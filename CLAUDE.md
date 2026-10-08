@@ -271,7 +271,13 @@ allowed. Checked 2026-09-23:
 - Customers (5): Aleksei Belov `+14155550123` (VISA on file), Maya Test `+14155550199`
   (VISA on file), Alex Test 1 `+14155550112` (card on file, made by an enrollment test),
   and "E2E Test Client" ×2 on `+14155550188` (a duplicate on purpose, no cards).
-  `+14155550100` and `+14155550177` match no one. No bookings in Sept 2026.
+  `+14155550100` and `+14155550177` match no one.
+- Bookings: CreateBooking accepts past `start_at`, so visit history is seeded directly. A past
+  `ACCEPTED` booking counts as a visit (Square has no "completed"; `NO_SHOW` and cancelled don't).
+  Seeded history (2026-10-08): Aleksei — Sep 8 Medium Extensions TOP, Carla, Pacific Ave
+  (refill window 28–35 d) and Oct 5 GEL Russian Manicure MASTER, Gina, Union St (free fix
+  window ≤7 d); his earlier test-call bookings are cancelled. Maya — Sep 28 FREE Fix, Pacific Ave.
+  Test calls that book leave real bookings; cancel them if they disturb a seeded history.
 
 Conventions:
 - `bun run typecheck` clean before commit.
