@@ -176,6 +176,13 @@ In this repo:
     pick to one of them (`bindSlot`) and returns a server-built `readBack`.
     `square_book` takes no args and books only the slot whose read-back the caller last
     heard (fingerprint), after phone → one customer with a card → live re-check.
+  - `tools/square/history.ts` — `square_visit_history` (report, no args): the identified caller's
+    past visits (last `history.lookbackDays`, past + `ACCEPTED` only) and server-decided
+    eligibility: `repair` = free_fix | free_fix_unclear_master | paid, `refill` = eligible |
+    too_early | too_late | no_recent_extensions. Rules are `BUSINESS.history` (windows inclusive,
+    business-timezone calendar days; repairs don't restart the free-fix window). Result kept in
+    `CallState.history` with provider ids for booking the original master; the model gets names only.
+    Unit tests: `bun test`.
   - `tools/card-link.ts` — `send_card_link(email)`, starts card-on-file enrollment.
   - Caller ID: `AgentSessionOptions.callerPhone`; the browser test UI sends it as `/ws?phone=`.
   - Twilio voice: `POST /twilio/voice` (signature-checked with `TWILIO_AUTH_TOKEN` against

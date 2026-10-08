@@ -80,6 +80,22 @@ export interface BusinessProfile {
     levels: { name: string; words: string[]; rank: number }[];
     /** Provider locations the agent books for, by name. Others (e.g. a default test location) are ignored. */
     studios: string[];
+    /**
+     * Visit history rules (refill, free fix). Windows are calendar days in the
+     * business time zone, inclusive. Services by provider item name.
+     */
+    history: {
+        /** How far back to read bookings. */
+        lookbackDays: number;
+        /** Visits that count as extensions done here (a new set or a refill). */
+        extensionServices: string[];
+        /** Refill only when the last extensions visit was this many days ago. */
+        refillDays: { min: number; max: number };
+        /** A repair is free when the last visit was at most this many days ago. */
+        freeFixDays: number;
+        /** Repairs: they never start a new free-fix window themselves. */
+        repairServices: string[];
+    };
 }
 
 export const ZORINA: BusinessProfile = {
@@ -157,7 +173,7 @@ export const ZORINA: BusinessProfile = {
     cardPolicy: 'A valid card on file is required for every appointment. '
         + 'Same-day cancellations are charged 100% of the scheduled service price. '
         + 'Cancellations made with less than 24 hours notice are charged 50% of the scheduled service price.',
-    // The workflow doc says no Gel-X; the v1 config says treat it as extensions. Ask Anastasia.
+    // Confirmed with the owner (2026-10-08): no Gel-X.
     notOffered: 'Gel-X',
     levels: [
         { name: 'Top', words: ['top'], rank: 3 },
@@ -165,6 +181,15 @@ export const ZORINA: BusinessProfile = {
         { name: 'Master', words: ['master'], rank: 2 },
     ],
     studios: ['Pacific Avenue', 'Union Street'],
+    // Owner (2026-10-08): outside the refill window → front desk; any visit counts for a
+    // free fix; day 7 inclusive; a paid repair can be done by any master.
+    history: {
+        lookbackDays: 90,
+        extensionServices: ['Nail Extension', 'Nail Extension Refill'],
+        refillDays: { min: 28, max: 35 },
+        freeFixDays: 7,
+        repairServices: ['FREE Fix', 'Extension for 1 nail'],
+    },
 };
 
 /** The business this process serves. One tenant for now. */

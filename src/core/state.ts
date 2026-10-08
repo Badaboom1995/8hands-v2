@@ -92,6 +92,42 @@ export interface CallState {
     customerLookup?: Promise<void>;
     /** Other phones/emails tried to find the profile. Server only. */
     identifyAttempts?: number;
+    /** The caller's recent visits and what they qualify for. Server only; the model sees a summary. */
+    history?: VisitHistory;
+}
+
+/** One past visit: a past, accepted booking. */
+export interface Visit {
+    /** Local date YYYY-MM-DD. */
+    date: string;
+    /** "Mon, Oct 5" */
+    day: string;
+    /** Calendar days before today, in the business time zone. */
+    daysAgo: number;
+    /** Provider item names, in booking order. */
+    services: string[];
+    masters: string[];
+    studio: string;
+    extensions: boolean;
+    /** Provider ids, to book the same master or studio later. Never shown to the model. */
+    ref: { bookingId: string; locationId: string; teamMemberIds: string[] };
+}
+
+/**
+ * What the caller's history qualifies them for. Decided by the server from
+ * provider bookings, never from what the caller says.
+ * repair: free_fix (with the original master), free_fix_unclear_master (several
+ * masters on the last visit day), paid (any master).
+ * refill: eligible, too_early / too_late (outside the window: front desk),
+ * no_recent_extensions (none in the lookback).
+ */
+export interface VisitHistory {
+    customerId: string;
+    visits: Visit[];
+    lastVisit?: Visit;
+    lastExtensions?: Visit;
+    repair: 'free_fix' | 'free_fix_unclear_master' | 'paid';
+    refill: 'eligible' | 'too_early' | 'too_late' | 'no_recent_extensions';
 }
 
 /** The caller resolved to a booking-provider customer, never guessed between duplicates. */
@@ -363,7 +399,7 @@ export function needsReadBack(state: CallState): boolean {
 /** Server-only fields; never shown to the model. */
 const HIDDEN = new Set([
     'notes', 'offeredSlots', 'slot', 'filledBySlot', 'searchWindow', 'reviewed', 'booking', 'callId', 'callerPhone',
-    'customer', 'customerLookup', 'identifyAttempts',
+    'customer', 'customerLookup', 'identifyAttempts', 'history',
 ]);
 
 /** What the model sees after each save: confirmed facts and what is still missing. */

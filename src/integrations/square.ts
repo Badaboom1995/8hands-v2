@@ -274,6 +274,68 @@ export interface SquareBooking {
     start_at: string;
     location_id: string;
     customer_id?: string;
+    appointment_segments?: {
+        duration_minutes?: number;
+        team_member_id?: string;
+        service_variation_id?: string;
+        service_variation_version?: number;
+    }[];
+}
+
+const DAY_MS = 86_400_000;
+/** ListBookings accepts at most 31 days per request. */
+const BOOKINGS_WINDOW_DAYS = 31;
+
+/** A customer's bookings that start in [from, to), every status, every location. */
+export async function listCustomerBookings(customerId: string, from: Date, to: Date): Promise<SquareBooking[]> {
+    const windows: [number, number][] = [];
+    for (let t = from.getTime(); t < to.getTime(); t += BOOKINGS_WINDOW_DAYS * DAY_MS) {
+        windows.push([t, Math.min(t + BOOKINGS_WINDOW_DAYS * DAY_MS, to.getTime())]);
+    }
+    const pages = await Promise.all(windows.map(async ([min, max]) => {
+        const out: SquareBooking[] = [];
+        let cursor: string | undefined;
+        do {
+            const q = new URLSearchParams({
+                customer_id: customerId, limit: '100',
+                start_at_min: new Date(min).toISOString(), start_at_max: new Date(max).toISOString(),
+            });
+            if (cursor) q.set('cursor', cursor);
+            const r = await call<{ bookings?: SquareBooking[]; cursor?: string }>('GET', `/bookings?${q}`);
+            out.push(...(r.bookings ?? []));
+            cursor = r.cursor;
+        } while (cursor);
+        return out;
+    }));
+    const byId = new Map(pages.flat().map((b) => [b.id, b]));
+    return [...byId.values()];
+}
+
+/** Item names for variation ids, including variations no longer bookable or deleted. */
+export async function variationItemNames(variationIds: string[]): Promise<Map<string, string>> {
+    const out = new Map<string, string>();
+    if (!variationIds.length) return out;
+    const r = await call<{
+        objects?: { id: string; item_variation_data?: { item_id?: string } }[];
+        related_objects?: { id: string; item_data?: { name?: string } }[];
+    }>('POST', '/catalog/batch-retrieve', { object_ids: variationIds, include_related_objects: true, include_deleted_objects: true });
+    const items = new Map((r.related_objects ?? []).map((o) => [o.id, o.item_data?.name?.trim()]));
+    for (const v of r.objects ?? []) {
+        const name = items.get(v.item_variation_data?.item_id ?? '');
+        if (name) out.set(v.id, name);
+    }
+    return out;
+}
+
+/** Given names for team member ids, active or not. */
+export async function teamMemberNames(ids: string[]): Promise<Map<string, string>> {
+    const out = new Map<string, string>();
+    await Promise.all(ids.map(async (id) => {
+        const r = await call<{ team_member?: SquareTeamMember }>('GET', `/team-members/${id}`);
+        const m = r.team_member;
+        out.set(id, m?.given_name?.trim() || m?.family_name?.trim() || 'Staff');
+    }));
+    return out;
 }
 
 export interface BookingSegment {
