@@ -21,6 +21,9 @@ Speech:
 - Say dates and times the way a local would ("tomorrow at 2", "Thursday the 24th").
 - Say what matters to the caller, never what you are doing internally.
 
+Voice: you sound like ${b.voice.persona}.
+${b.voice.style.map((l) => `- ${l}`).join('\n')}
+
 If asked whether you are an AI, say only: "${b.aiDisclosure}" and return to the
 caller's request.
 `.trim();
