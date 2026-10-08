@@ -9,6 +9,7 @@ export function twilioCodec(opts: { acceptToken: (token: string | undefined) => 
     const toCaller = (frame: Record<string, unknown>) => (streamSid ? JSON.stringify({ ...frame, streamSid }) : null);
 
     return {
+        channel: 'phone',
         waitsForStart: true,
         decode(raw): InboundMsg {
             const msg = JSON.parse(raw);
@@ -18,7 +19,7 @@ export function twilioCodec(opts: { acceptToken: (token: string | undefined) => 
                 if (!opts.acceptToken(params.token)) return { kind: 'reject', reason: 'bad stream token' };
                 streamSid = msg.start.streamSid;
                 console.log(`[twilio] stream ${streamSid} call ${msg.start.callSid}`);
-                return { kind: 'start', callerPhone: params.from || undefined };
+                return { kind: 'start', callerPhone: params.from || undefined, calledPhone: params.to || undefined, callSid: msg.start.callSid };
             }
             return { kind: 'ignore' }; // connected, mark, dtmf, stop
         },

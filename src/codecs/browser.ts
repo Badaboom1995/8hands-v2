@@ -4,6 +4,7 @@ import type { CallCodec, InboundMsg } from '../core/transport';
 
 export function browserCodec(): CallCodec {
     return {
+        channel: 'browser',
         decode(raw): InboundMsg {
             const msg = JSON.parse(raw);
             if (msg.type === 'text') return { kind: 'text', text: msg.text };

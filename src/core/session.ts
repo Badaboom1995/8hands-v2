@@ -6,7 +6,8 @@
 import WebSocket from 'ws';
 
 import { createCallState, type CallState } from './state';
-import { CallStats, type CallTotals, type TurnStats } from './stats';
+import { CallStats, TRANSCRIBE_MODEL, transcriptionCostUsd, type CallTotals, type TurnStats } from './stats';
+import type { TraceEvent } from './trace';
 import { isToolError, parseToolArgs, toRealtimeTool, type AgentTool, type ToolError } from './tools';
 
 export interface AgentSessionOptions {
@@ -45,6 +46,8 @@ export interface AgentSessionEvents {
     onState: (state: CallState) => void;
     onError: (message: string) => void;
     onClose: () => void;
+    /** Full per-call trace (messages, responses, tools, latency, cost) for the call log. */
+    onTrace: (event: TraceEvent) => void;
 }
 
 /** Delay before retrying a failed response: OpenAI's "try again in 1.2s / 841ms" plus a margin. */
@@ -80,6 +83,7 @@ export class AgentSession {
         this.state = createCallState(opts.callerPhone);
         opts.onCallStart?.(this.state);
         this.stats = new CallStats(opts.model);
+        this.turnStartAt = Date.now(); // the greeting's latency runs from connect
 
         this.ws = new WebSocket(
             `wss://api.openai.com/v1/realtime?model=${encodeURIComponent(opts.model)}`,
@@ -87,13 +91,18 @@ export class AgentSession {
         );
         this.ws.on('open', () => this.configure());
         this.ws.on('message', (data) => this.handleEvent(JSON.parse(data.toString())));
-        this.ws.on('error', (err) => this.events.onError(err.message));
+        this.ws.on('error', (err) => {
+            this.trace({ kind: 'error', text: err.message, payload: { source: 'openai_socket' } });
+            this.events.onError(err.message);
+        });
         this.ws.on('close', () => this.events.onClose());
     }
 
     // ── Input (called by the transport) ──
 
     sendText(text: string): void {
+        this.trace({ kind: 'caller_message', text, payload: { typed: true } });
+        this.startTurn('caller');
         this.send({
             type: 'conversation.item.create',
             item: {
@@ -111,6 +120,48 @@ export class AgentSession {
 
     close(): void {
         if (this.ws.readyState === WebSocket.OPEN) this.ws.close();
+    }
+
+    // ── Trace ──
+    //
+    // Latency of a turn: caller stopped speaking (VAD fired, so it already
+    // includes the VAD silence) → first agent audio leaves the server. A turn
+    // may take several responses (a silent tool call, then speech); the clock
+    // runs until audio actually starts. The greeting's turn starts at connect.
+
+    private turnStartAt = 0;
+    private turnTrigger: 'call_start' | 'caller' = 'call_start';
+    private turnResponses = 0;
+    private turnToolMs = 0;
+    private responseId = '';
+    private responseCreatedAt = 0;
+    /** Set by the first audio of a response that ended a turn. */
+    private responseLatency: Record<string, unknown> | null = null;
+    /** Caller speech start (session audio ms) by conversation item, for message length. */
+    private readonly callerSpeechStart = new Map<string, { audioMs: number; at: number }>();
+    private readonly callerSpeechMs = new Map<string, number>();
+    /** Tools ran after a reply that spoke ("let me check…"); the result reply's latency runs from here. */
+    private toolTurn: { startedAt: number; speechEndsAt: number; toolMs: number } | null = null;
+
+    private trace(e: Omit<TraceEvent, 'at'> & { at?: number }): void {
+        try {
+            this.events.onTrace({ ...e, at: e.at ?? Date.now() });
+        } catch (err) {
+            console.error('[trace]', err);
+        }
+    }
+
+    private startTurn(trigger: 'caller'): void {
+        this.turnStartAt = Date.now();
+        this.turnTrigger = trigger;
+        this.turnResponses = 0;
+        this.turnToolMs = 0;
+    }
+
+    /** Length of the audio streamed in the current response, ms. */
+    private audioMs(): number {
+        const format = this.opts.audioFormat || { type: 'audio/pcm', rate: 24000 };
+        return this.audioBytes / (format.type === 'audio/pcmu' ? 8 : 48); // pcmu 8kHz×1B, pcm16 24kHz×2B
     }
 
     // ── Internals ──
@@ -237,9 +288,7 @@ export class AgentSession {
 
     /** Duration of the audio streamed in the current response, from byte count. */
     private audioEndsAt(): number {
-        const format = this.opts.audioFormat || { type: 'audio/pcm', rate: 24000 };
-        const bytesPerMs = format.type === 'audio/pcmu' ? 8 : 48; // pcmu 8kHz×1B, pcm16 24kHz×2B
-        return this.audioFirstAt + this.audioBytes / bytesPerMs;
+        return this.audioFirstAt + this.audioMs();
     }
 
     /**
@@ -248,13 +297,14 @@ export class AgentSession {
      * One response.create per call would collide: only one response may be
      * active at a time.
      */
-    private async runTools(calls: { name: string; call_id: string; arguments: string }[]): Promise<void> {
+    private async runTools(calls: { name: string; call_id: string; arguments: string }[], responseId: string): Promise<void> {
         // When the calling reply's own speech ends; read before any await, while
         // the audio counters still describe that reply.
         let speechEndsAt = this.audioBytes ? this.audioEndsAt() : 0;
+        const toolsStartedAt = Date.now();
         let retry: string | null = null;
         for (const call of calls) {
-            const r = await this.runTool(call.name, call.call_id, call.arguments);
+            const r = await this.runTool(call.name, call.call_id, call.arguments, responseId);
             if (r.fillerEndsAt) speechEndsAt = Math.max(speechEndsAt, r.fillerEndsAt);
             if (r.willRetry && !retry) retry = call.name;
         }
@@ -266,6 +316,9 @@ export class AgentSession {
             return;
         }
 
+        if (!this.turnStartAt) {
+            this.toolTurn = { startedAt: toolsStartedAt, speechEndsAt, toolMs: Date.now() - toolsStartedAt };
+        }
         // Don't talk over the "let me check…" that came with the calls, or a filler.
         const pause = speechEndsAt ? Math.max(0, speechEndsAt + AgentSession.SPEECH_GAP_MS - Date.now()) : 0;
         setTimeout(() => this.send({ type: 'response.create' }), pause);
@@ -273,9 +326,11 @@ export class AgentSession {
 
     /** Run one tool call and send its result. The caller decides what response comes next. */
     private async runTool(
-        name: string, callId: string, rawArgs: string,
+        name: string, callId: string, rawArgs: string, responseId: string,
     ): Promise<{ willRetry: boolean; fillerEndsAt?: number }> {
         let fillerEndsAt: number | undefined;
+        const startedAt = Date.now();
+        const stateBefore = JSON.stringify(this.state);
         const tool = (this.opts.tools || []).find((t) => t.name === name);
         // For the trace: what the model sent, even if it fails to parse.
         let args: unknown = safeJson(rawArgs);
@@ -306,6 +361,13 @@ export class AgentSession {
         const status = failed ? (willRetry ? 'error' : 'gave_up')
             : priorFailures > 0 ? 'recovered' : blocked ? 'blocked' : 'ok';
         const result = { status, ...(outcome as object) };
+
+        const durationMs = Date.now() - startedAt;
+        if (this.turnStartAt) this.turnToolMs += durationMs;
+        this.trace({ kind: 'tool_call', toolName: name, status, durationMs, responseId, payload: { callId, rawArgs, args, result } });
+        if (JSON.stringify(this.state) !== stateBefore) {
+            this.trace({ kind: 'state_change', toolName: name, responseId, payload: { state: JSON.parse(JSON.stringify(this.state)) } });
+        }
 
         this.events.onToolCall({ name, args, result });
         this.events.onState(this.state);
@@ -356,7 +418,7 @@ export class AgentSession {
                 audio: {
                     input: {
                         format,
-                        transcription: { model: 'gpt-4o-mini-transcribe' },
+                        transcription: { model: TRANSCRIBE_MODEL },
                         // Filter background noise (salon music, dryers) before VAD and the model hear it.
                         noise_reduction: { type: 'near_field' },
                         // Strict VAD: don't treat mic-startup clicks/hiss as a turn.
@@ -403,10 +465,40 @@ export class AgentSession {
                 this.cancelRecovery();
                 this.audioFirstAt = 0;
                 this.audioBytes = 0;
+                this.responseId = event.response?.id ?? '';
+                this.responseCreatedAt = Date.now();
+                this.responseLatency = null;
+                if (this.turnStartAt) this.turnResponses += 1;
                 break;
 
             case 'response.output_audio.delta':
-                if (!this.audioFirstAt) this.audioFirstAt = Date.now();
+                if (!this.audioFirstAt) {
+                    this.audioFirstAt = Date.now();
+                    const tools = this.toolTurn;
+                    this.toolTurn = null;
+                    if (!this.turnStartAt && tools) {
+                        this.responseLatency = {
+                            // tools started → first audio of the reply with their result
+                            latencyMs: this.audioFirstAt - tools.startedAt,
+                            trigger: 'tool_result',
+                            // what the caller hears: end of "let me check…" → this audio
+                            silenceMs: tools.speechEndsAt ? Math.max(0, Math.round(this.audioFirstAt - tools.speechEndsAt)) : null,
+                            openaiMs: this.audioFirstAt - this.responseCreatedAt,
+                            toolMs: tools.toolMs,
+                        };
+                    }
+                    if (this.turnStartAt) {
+                        this.responseLatency = {
+                            latencyMs: this.audioFirstAt - this.turnStartAt,
+                            trigger: this.turnTrigger,
+                            // OpenAI: this response's start → its first audio
+                            openaiMs: this.audioFirstAt - this.responseCreatedAt,
+                            toolMs: this.turnToolMs,
+                            responses: this.turnResponses,
+                        };
+                        this.turnStartAt = 0;
+                    }
+                }
                 this.audioBytes += Math.floor((event.delta?.length ?? 0) * 3 / 4); // base64 → bytes
                 this.events.onAudio(event.delta);
                 break;
@@ -416,20 +508,45 @@ export class AgentSession {
                 break;
 
             case 'conversation.item.input_audio_transcription.completed':
+                this.trace({
+                    kind: 'caller_message',
+                    text: event.transcript,
+                    costUsd: transcriptionCostUsd(event.usage),
+                    durationMs: this.callerSpeechMs.get(event.item_id),
+                    at: this.callerSpeechStart.get(event.item_id)?.at,
+                    payload: { itemId: event.item_id, model: TRANSCRIBE_MODEL, usage: event.usage, languages: event.languages },
+                });
                 this.events.onUserTranscript(event.transcript);
                 break;
 
+            case 'conversation.item.input_audio_transcription.failed':
+                this.trace({ kind: 'error', text: event.error?.message ?? 'transcription failed', payload: { source: 'transcription', event } });
+                break;
+
             case 'input_audio_buffer.speech_started':
+                if (event.item_id) this.callerSpeechStart.set(event.item_id, { audioMs: event.audio_start_ms, at: Date.now() });
+                if (this.audioFirstAt && Date.now() < this.audioEndsAt()) {
+                    const playedMs = Date.now() - this.audioFirstAt;
+                    this.trace({
+                        kind: 'interrupt',
+                        responseId: this.responseId,
+                        payload: { playedMs, cutMs: Math.round(this.audioEndsAt() - Date.now()), streamedMs: Math.round(this.audioMs()) },
+                    });
+                }
                 this.callerSpeaking = true;
                 if (this.recoverTimer) clearTimeout(this.recoverTimer);
                 this.recoverTimer = null;
                 this.events.onInterrupt();
                 break;
 
-            case 'input_audio_buffer.speech_stopped':
+            case 'input_audio_buffer.speech_stopped': {
                 this.callerSpeaking = false;
+                this.startTurn('caller');
+                const start = this.callerSpeechStart.get(event.item_id);
+                if (start !== undefined) this.callerSpeechMs.set(event.item_id, event.audio_end_ms - start.audioMs);
                 if (this.recoverPending) this.scheduleRecovery();
                 break;
+            }
 
             case 'response.done': {
                 if (this.opts.debug) {
@@ -457,14 +574,41 @@ export class AgentSession {
                     this.recoverDelayMs = AgentSession.RECOVER_MS;
                 }
                 const usage = event.response?.usage;
-                if (usage) this.events.onStats(this.stats.addTurn(usage));
+                const turnStats = usage ? this.stats.addTurn(usage) : null;
+                if (turnStats) this.events.onStats(turnStats);
+                const responseId: string = event.response?.id ?? this.responseId;
+                const messages = (event.response?.output ?? []).filter((item: any) => item.type === 'message');
+                const audioMs = Math.round(this.audioMs());
+                for (const item of messages) {
+                    const text = (item.content ?? []).map((c: any) => c.transcript ?? c.text ?? '').join(' ').trim();
+                    if (!text) continue;
+                    this.trace({
+                        kind: 'agent_message',
+                        text,
+                        responseId,
+                        at: this.audioFirstAt || undefined,
+                        // one response = one audio stream; split across messages only when there's one
+                        durationMs: messages.length === 1 ? audioMs : undefined,
+                        payload: { itemId: item.id, status: item.status },
+                    });
+                }
+                const latency = this.responseLatency;
+                this.trace({
+                    kind: 'response',
+                    responseId,
+                    status,
+                    costUsd: turnStats?.turn.cost ?? 0,
+                    latencyMs: latency?.latencyMs as number | undefined,
+                    durationMs: audioMs || undefined,
+                    payload: { latency, audioMs, response: event.response },
+                });
                 this.events.onTurnDone();
 
                 const calls = (event.response?.output ?? []).filter(
                     (item: any) => item.type === 'function_call',
                 );
                 if (calls.length > 0) {
-                    void this.runTools(calls);
+                    void this.runTools(calls, responseId);
                 } else if (this.fillerDone) {
                     // The filler just finished generating; the result waits for its audio.
                     const resolve = this.fillerDone;
@@ -481,6 +625,7 @@ export class AgentSession {
 
             case 'error':
                 console.error('[openai error]', JSON.stringify(event.error));
+                this.trace({ kind: 'error', text: event.error?.message ?? 'unknown', payload: { source: 'openai', error: event.error } });
                 this.events.onError(event.error?.message || 'unknown');
                 break;
         }

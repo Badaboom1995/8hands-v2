@@ -6,6 +6,7 @@
 import WebSocket from 'ws';
 
 import { AgentSession, type AgentSessionOptions } from './session';
+import { CallRecorder, type EndReason } from '../calls/recorder';
 import { composeAppointment, type Appointment } from '../tools/square/compose';
 import type { CallState } from './state';
 import type { CallTotals, TurnStats } from './stats';
@@ -17,7 +18,7 @@ export type InboundMsg =
     /** Test UI: price and time the appointment in call state. */
     | { kind: 'calculate' }
     /** The phone line is up (Twilio `start`); carries the caller ID. */
-    | { kind: 'start'; callerPhone?: string }
+    | { kind: 'start'; callerPhone?: string; calledPhone?: string; callSid?: string }
     /** Not a call we accept: hang up. */
     | { kind: 'reject'; reason: string }
     | { kind: 'ignore' };
@@ -25,6 +26,7 @@ export type InboundMsg =
 // One codec instance per connection (may hold per-call state, e.g. Twilio's streamSid).
 // Each encoder returns a wire frame for that client, or null to skip the event.
 export interface CallCodec {
+    channel: 'phone' | 'browser';
     /** Start the session on the first `start` message, not on connect (caller ID arrives there). */
     waitsForStart?: boolean;
     decode(raw: string): InboundMsg;
@@ -41,15 +43,18 @@ export interface CallCodec {
     calculation?(result: Appointment | { error: string }): string | null;
 }
 
-export function attachCall(ws: WebSocket, codec: CallCodec, opts: AgentSessionOptions): void {
+export function attachCall(ws: WebSocket, codec: CallCodec, opts: AgentSessionOptions, meta: { businessId: string }): void {
     const out = (frame: string | null | undefined): void => {
         if (frame && ws.readyState === WebSocket.OPEN) ws.send(frame);
     };
 
     let session: AgentSession | null = null;
-    const start = (callerPhone: string | undefined): AgentSession => {
+    let recorder: CallRecorder | null = null;
+    let endReason: EndReason | null = null;
+    const start = (line: { callerPhone?: string; calledPhone?: string; callSid?: string }): AgentSession => {
+        const { callerPhone } = line;
         console.log(`call started${callerPhone ? ` from ${callerPhone}` : ''}`);
-        return new AgentSession({ ...opts, callerPhone }, {
+        const s = new AgentSession({ ...opts, callerPhone }, {
             onReady: () => out(codec.ready?.(opts.model)),
             onAudio: (data) => out(codec.audio(data)),
             onAgentTextDelta: (delta) => out(codec.agentTextDelta?.(delta)),
@@ -61,15 +66,27 @@ export function attachCall(ws: WebSocket, codec: CallCodec, opts: AgentSessionOp
             onState: (state) => out(codec.state?.(state)),
             onError: (message) => out(codec.error?.(message)),
             onClose: () => {
+                endReason ??= 'openai_closed';
                 if (ws.readyState === WebSocket.OPEN) ws.close();
             },
+            onTrace: (e) => recorder?.record(e),
         });
+        recorder = new CallRecorder({
+            callId: s.state.callId,
+            businessId: meta.businessId,
+            channel: codec.channel,
+            model: opts.model,
+            callerPhone,
+            calledPhone: line.calledPhone,
+            twilioCallSid: line.callSid,
+        }, () => ({ state: s.state, totals: s.stats.totals() }));
+        return s;
     };
-    if (!codec.waitsForStart) session = start(opts.callerPhone);
+    if (!codec.waitsForStart) session = start({ callerPhone: opts.callerPhone });
 
     ws.on('message', (data) => {
         const msg = codec.decode(data.toString());
-        if (msg.kind === 'start') session ??= start(msg.callerPhone ?? opts.callerPhone);
+        if (msg.kind === 'start') session ??= start({ ...msg, callerPhone: msg.callerPhone ?? opts.callerPhone });
         else if (msg.kind === 'reject') {
             console.warn(`call rejected: ${msg.reason}`);
             ws.close();
@@ -86,7 +103,8 @@ export function attachCall(ws: WebSocket, codec: CallCodec, opts: AgentSessionOp
 
     ws.on('close', () => {
         if (!session) return;
-        console.log(`call ended: ${session.stats.summaryLine()}`);
+        endReason ??= 'caller_hangup'; // before session.close(): its onClose may fire synchronously
         session.close();
+        void recorder?.end(endReason);
     });
 }

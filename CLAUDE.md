@@ -210,7 +210,24 @@ In this repo:
 - Test page PIN: `TEST_PAGE_PIN` (6 digits, set in Railway; unset locally = no gate) guards
   `/`, `/ws`, and `/api/card-enrollment/start` via an HttpOnly cookie (`src/http/pin-gate.ts`).
   Twilio, card-on-file, and `/health` routes stay public.
-- Everything else (DB, queue, eval harness): decide and write here.
+- DB: **Railway Postgres** (service `Postgres`, `us-west2`, same region as `agent`), reached via
+  `DATABASE_URL=${{Postgres.DATABASE_URL}}` on the private network. Bun's built-in client
+  (`src/db/index.ts`); `src/db/migrations/*.sql` applied at startup (`schema_migrations`).
+  Without `DATABASE_URL` (local default) call logs go to stdout only. Local DB:
+  `docker run -d --name pg8h -e POSTGRES_PASSWORD=dev -p 55432:5432 postgres:17-alpine`, then
+  `DATABASE_URL=postgres://postgres:dev@localhost:55432/postgres`. Browse prod: Railway → Postgres → Data.
+- Call log: tables `calls` (one row per call: channel, caller, duration, end reason, tokens,
+  OpenAI / transcription / Twilio cost, avg/max latency, final state, outcome) and `call_events`
+  (ordered, untruncated: `caller_message`, `agent_message`, `response`, `tool_call`, `state_change`,
+  `interrupt`, `error`). The session emits `TraceEvent`s (`core/trace.ts`) via `onTrace`;
+  `calls/recorder.ts` buffers and batch-writes them off the audio path, dumps to stdout if the DB
+  stays down, closes live calls' logs on SIGTERM, and fills `twilio_cost_usd` from Twilio's
+  Calls API 1–15 min after hang-up. Cost is per **response** (caller audio is billed in the next
+  response); caller messages carry only their transcription cost. `response.latency_ms` =
+  caller stopped speaking (VAD fired) → first agent audio leaving the server, across tool
+  round trips (`payload.latency`: trigger `call_start` | `caller` | `tool_result`, `openaiMs`,
+  `toolMs`, `silenceMs`); network legs to the caller are not included.
+- Everything else (queue, eval harness): decide and write here.
 
 ```bash
 bun install

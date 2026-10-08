@@ -47,3 +47,17 @@ export function streamTwiml(streamUrl: string, params: Record<string, string>): 
         .join('');
     return `<?xml version="1.0" encoding="UTF-8"?><Response><Connect><Stream url="${xml(streamUrl)}">${p}</Stream></Connect></Response>`;
 }
+
+/** What Twilio charged for a call, USD; null until Twilio has priced it (a minute or so after it ends). */
+export async function fetchCallPrice(callSid: string): Promise<number | null> {
+    const sid = process.env.TWILIO_ACCOUNT_SID, token = process.env.TWILIO_AUTH_TOKEN;
+    if (!sid || !token) throw new Error('TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN are required');
+    const res = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${sid}/Calls/${callSid}.json`, {
+        headers: { authorization: `Basic ${btoa(`${sid}:${token}`)}` },
+    });
+    if (!res.ok) throw new Error(`Twilio ${res.status}`);
+    const call = await res.json() as { price: string | null; price_unit: string | null };
+    if (call.price === null || call.price === undefined) return null;
+    if (call.price_unit && call.price_unit !== 'USD') console.warn(`[twilio] call ${callSid} priced in ${call.price_unit}`);
+    return Math.abs(Number(call.price)); // Twilio reports charges as negative
+}

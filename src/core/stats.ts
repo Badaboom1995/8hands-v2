@@ -10,6 +10,21 @@ const PRICE_TABLE: Record<string, {
 };
 const FALLBACK_MODEL = 'gpt-realtime-2.1';
 
+// Caller-speech transcription (billed separately from the realtime model). USD per 1M tokens.
+const TRANSCRIBE_PRICE = { audioIn: 3, textIn: 1.25, textOut: 5, perMinute: 0.003 };
+export const TRANSCRIBE_MODEL = 'gpt-4o-mini-transcribe';
+
+/** `usage` of conversation.item.input_audio_transcription.completed: tokens or duration. */
+export function transcriptionCostUsd(usage: any): number {
+    if (!usage) return 0;
+    if (usage.type === 'duration') return (usage.seconds || 0) / 60 * TRANSCRIBE_PRICE.perMinute;
+    const det = usage.input_token_details || {};
+    const audio = det.audio_tokens ?? usage.input_tokens ?? 0;
+    const text = det.text_tokens ?? 0;
+    return (audio * TRANSCRIBE_PRICE.audioIn + text * TRANSCRIBE_PRICE.textIn
+        + (usage.output_tokens || 0) * TRANSCRIBE_PRICE.textOut) / 1_000_000;
+}
+
 export interface TurnStats {
     input: number;
     output: number;

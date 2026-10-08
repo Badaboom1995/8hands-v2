@@ -11,6 +11,8 @@ export interface CatalogRef {
 }
 
 export interface BusinessProfile {
+    /** Stable tenant id (call logs, later the DB key). */
+    id: string;
     agentName: string;
     /** Spoken verbatim as soon as the call connects. */
     greeting: string;
@@ -79,6 +81,7 @@ export interface BusinessProfile {
 }
 
 export const ZORINA: BusinessProfile = {
+    id: 'zorina',
     agentName: 'Maya',
     greeting: 'Hi, thanks for calling Zorina Nail Studio! How can I help you today?',
     businessName: 'Zorina Nail Studio',

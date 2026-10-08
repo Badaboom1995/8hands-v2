@@ -19,6 +19,9 @@ import { squareMastersTool } from './tools/square/masters';
 import { squareServicesTool } from './tools/square/services';
 import { updateCallStateTool } from './tools/update-state';
 import { attachCall } from './core/transport';
+import { BUSINESS } from './business';
+import { endAllCalls } from './calls/recorder';
+import { db, migrate } from './db';
 import { hasPin, pinGateEnabled, pinPage, submitPin } from './http/pin-gate';
 import { consumeStreamToken, issueStreamToken, streamTwiml, validTwilioSignature } from './integrations/twilio';
 import type { AgentSessionOptions } from './core/session';
@@ -102,7 +105,7 @@ const server = http.createServer(async (req, res) => {
             }
             console.log(`[twilio] incoming call ${params.CallSid} from ${params.From} to ${params.To}`);
             res.writeHead(200, { 'content-type': 'text/xml' });
-            return res.end(streamTwiml(`wss://${host}/twilio/media`, { token: issueStreamToken(), from: params.From ?? '' }));
+            return res.end(streamTwiml(`wss://${host}/twilio/media`, { token: issueStreamToken(), from: params.From ?? '', to: params.To ?? '' }));
         }
 
         // Card-on-file enrollment (public page ↔ server)
@@ -148,13 +151,13 @@ const browserWss = new WebSocketServer({ noServer: true });
 browserWss.on('connection', (ws, req) => {
     // The browser test UI simulates caller ID with ?phone=.
     const callerPhone = new URL(req.url ?? '/', 'http://localhost').searchParams.get('phone') || undefined;
-    attachCall(ws, browserCodec(), { ...sessionOptions(), audioFormat: { type: 'audio/pcm', rate: 24000 }, callerPhone });
+    attachCall(ws, browserCodec(), { ...sessionOptions(), audioFormat: { type: 'audio/pcm', rate: 24000 }, callerPhone }, { businessId: BUSINESS.id });
 });
 
 // Twilio Media Stream; caller ID comes in the stream's `start` event.
 const twilioWss = new WebSocketServer({ noServer: true });
 twilioWss.on('connection', (ws) => {
-    attachCall(ws, twilioCodec({ acceptToken: consumeStreamToken }), { ...sessionOptions(), audioFormat: { type: 'audio/pcmu' } });
+    attachCall(ws, twilioCodec({ acceptToken: consumeStreamToken }), { ...sessionOptions(), audioFormat: { type: 'audio/pcmu' } }, { businessId: BUSINESS.id });
 });
 
 // Several WebSocket servers on one HTTP server: route the upgrade by path.
@@ -167,6 +170,19 @@ server.on('upgrade', (req, socket, head) => {
     }
     wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
 });
+
+// Call logs need the tables; a database problem must not stop calls, so log and go on.
+await migrate().catch((err) => console.error('[db] migration failed; call logs will retry or go to stdout:', err));
+if (!db) console.log('[db] DATABASE_URL not set; call logs go to stdout only');
+
+// Railway sends SIGTERM before replacing the container: finish the live calls' logs first.
+for (const signal of ['SIGTERM', 'SIGINT'] as const) {
+    process.once(signal, () => {
+        console.log(`[server] ${signal}: closing call logs`);
+        endAllCalls('server_shutdown').finally(() => process.exit(0));
+        setTimeout(() => process.exit(0), 8000).unref();
+    });
+}
 
 server.listen(PORT, () => {
     console.log(`agent-v2 web UI: http://localhost:${PORT} (model: ${MODEL}, test page PIN ${pinGateEnabled ? 'on' : 'off'})`);
