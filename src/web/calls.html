@@ -1,0 +1,295 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Call log — 8Hands</title>
+<style>
+:root {
+  --bg: #f6f6f4; --panel: #fff; --text: #1c1c1a; --muted: #6b6b66; --line: #e6e5e0;
+  --accent: #3b5bdb; --caller: #eef1f8; --agent: #f0f6ee; --warn: #b26a00; --bad: #c0392b; --good: #2f7d32;
+  --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #161615; --panel: #1f1f1d; --text: #ecebe6; --muted: #9a9993; --line: #33332f;
+    --accent: #8ea6ff; --caller: #232a3a; --agent: #20301f; --warn: #e0a040; --bad: #ff7b6b; --good: #7bc77e;
+    color-scheme: dark;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, -apple-system, sans-serif; }
+main { max-width: 1100px; margin: 0 auto; padding: 24px 16px 64px; }
+a { color: var(--accent); text-decoration: none; }
+h1 { font-size: 20px; margin: 0 0 16px; }
+.bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 16px; }
+.bar label { color: var(--muted); }
+input, select, button { font: inherit; color: inherit; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; }
+button { cursor: pointer; }
+button.on { border-color: var(--accent); color: var(--accent); }
+.summary { color: var(--muted); margin: 0 0 12px; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; }
+.tablewrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; }
+th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+th { font-weight: 600; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .03em; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+tbody tr { cursor: pointer; }
+tbody tr:hover { background: color-mix(in srgb, var(--accent) 6%, transparent); }
+tbody tr:last-child td { border-bottom: 0; }
+.chip { display: inline-block; padding: 1px 8px; border-radius: 99px; font-size: 12px; border: 1px solid var(--line); color: var(--muted); }
+.chip.good { color: var(--good); border-color: currentColor; }
+.chip.warn { color: var(--warn); border-color: currentColor; }
+.chip.bad { color: var(--bad); border-color: currentColor; }
+.empty { padding: 32px; text-align: center; color: var(--muted); }
+.slow { color: var(--warn); }
+.very-slow { color: var(--bad); }
+
+/* Call page */
+.head { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; margin-bottom: 12px; }
+.head h1 { margin: 0; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; margin-bottom: 12px; }
+.stat { padding: 10px 12px; }
+.stat b { display: block; font-size: 18px; font-variant-numeric: tabular-nums; }
+.stat > span { color: var(--muted); font-size: 12px; }
+.meta { color: var(--muted); font-size: 12px; margin: 0 0 16px; word-break: break-all; }
+.timeline { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+.ev { display: grid; grid-template-columns: 64px 1fr; gap: 10px; align-items: start; }
+.t { color: var(--muted); font: 12px var(--mono); padding-top: 9px; text-align: right; }
+.bubble { padding: 8px 12px; border-radius: 12px; max-width: 760px; white-space: pre-wrap; }
+.bubble.caller { background: var(--caller); }
+.bubble.agent { background: var(--agent); }
+.who { font-size: 12px; font-weight: 600; color: var(--muted); margin-bottom: 2px; }
+.sub { font-size: 12px; color: var(--muted); margin-top: 4px; }
+.row { padding: 6px 12px; border: 1px dashed var(--line); border-radius: 10px; font-size: 13px; max-width: 760px; }
+.row.tool { border-style: solid; }
+.row.error { border-color: var(--bad); color: var(--bad); }
+details summary { cursor: pointer; }
+pre { font: 12px/1.4 var(--mono); background: color-mix(in srgb, var(--text) 5%, transparent); padding: 8px; border-radius: 8px; overflow-x: auto; margin: 6px 0 0; white-space: pre-wrap; word-break: break-word; }
+.back { display: inline-block; margin-bottom: 12px; }
+@media (max-width: 600px) { .ev { grid-template-columns: 48px 1fr; } }
+</style>
+</head>
+<body>
+<main id="app"><p class="empty">Loading…</p></main>
+<script>
+const app = document.getElementById('app');
+
+// ---- helpers ----
+function h(tag, attrs, ...children) {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (v === undefined || v === null || v === false) continue;
+    if (k === 'class') el.className = v;
+    else if (k.startsWith('on')) el.addEventListener(k.slice(2), v);
+    else el.setAttribute(k, v === true ? '' : v);
+  }
+  for (const c of children.flat()) if (c !== null && c !== undefined && c !== false) el.append(c instanceof Node ? c : String(c));
+  return el;
+}
+const num = (v) => (v === null || v === undefined || v === '' ? null : Number(v));
+function money(v) {
+  const n = num(v);
+  if (n === null) return '—';
+  return '$' + (n >= 1 ? n.toFixed(2) : n.toFixed(4));
+}
+function dur(ms) {
+  if (ms === null || ms === undefined) return '—';
+  const s = Math.round(ms / 1000);
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+}
+function offset(ms) {
+  const s = ms / 1000;
+  return `${Math.floor(s / 60)}:${(s % 60).toFixed(1).padStart(4, '0')}`;
+}
+function secs(ms) { return ms === null || ms === undefined ? '' : `${(ms / 1000).toFixed(1)} s`; }
+function latency(ms) {
+  if (ms === null || ms === undefined) return h('span', {}, '—');
+  return h('span', { class: ms >= 2500 ? 'very-slow' : ms >= 1500 ? 'slow' : '' }, `${Math.round(ms)} ms`);
+}
+let TZ = 'UTC';
+const fmt = (iso, o) => new Intl.DateTimeFormat('en-US', { timeZone: TZ, ...o }).format(new Date(iso));
+const when = (iso) => fmt(iso, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+const localISO = (d) => new Intl.DateTimeFormat('en-CA', { timeZone: TZ }).format(d);
+const outcomeChip = (o) => o ? h('span', { class: 'chip ' + (o === 'booked' ? 'good' : o === 'not_booked' ? 'warn' : '') }, o.replace('_', ' ')) : h('span', { class: 'chip' }, '—');
+const pretty = (v) => h('pre', {}, JSON.stringify(v, null, 2));
+
+async function api(path) {
+  const r = await fetch(path, { headers: { accept: 'application/json' } });
+  const body = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(body.message || `HTTP ${r.status}`);
+  return body;
+}
+function fail(err) { app.replaceChildren(h('p', { class: 'empty' }, `Couldn't load: ${err.message}`)); }
+
+// ---- list ----
+async function showList() {
+  const q = new URLSearchParams(location.search);
+  let data;
+  try { data = await api('/api/calls?' + q.toString()); } catch (e) { return fail(e); }
+  TZ = data.timezone;
+  document.title = 'Call log — 8Hands';
+
+  const from = h('input', { type: 'date', value: data.from });
+  const to = h('input', { type: 'date', value: data.to });
+  const env = h('select', {}, h('option', { value: '' }, 'All environments'),
+    data.environments.map((e) => h('option', { value: e, selected: q.get('environment') === e }, e)));
+  const go = (f, t) => {
+    const p = new URLSearchParams({ from: f ?? from.value, to: t ?? to.value });
+    if (env.value) p.set('environment', env.value);
+    history.pushState(null, '', '/calls?' + p);
+    route();
+  };
+  from.addEventListener('change', () => go());
+  to.addEventListener('change', () => go());
+  env.addEventListener('change', () => go());
+  const today = new Date();
+  const daysAgo = (n) => localISO(new Date(today.getTime() - n * 86400000));
+  const preset = (label, f, t) => h('button', { class: data.from === f && data.to === t ? 'on' : '', onclick: () => go(f, t) }, label);
+
+  const calls = data.calls;
+  const total = calls.reduce((s, c) => s + (num(c.total_cost_usd) || 0), 0);
+  const lat = calls.map((c) => c.avg_latency_ms).filter((x) => x !== null);
+
+  const rows = calls.map((c) => h('tr', { onclick: (ev) => { if (ev.metaKey || ev.ctrlKey) open('/calls/' + c.id); else { history.pushState(null, '', '/calls/' + c.id); route(); } } },
+    h('td', {}, h('a', { href: '/calls/' + c.id, onclick: (e) => e.preventDefault() }, when(c.started_at))),
+    h('td', {}, c.caller_phone || '—'),
+    h('td', {}, h('span', { class: 'chip' }, c.channel), c.environment !== 'production' ? [' ', h('span', { class: 'chip' }, c.environment)] : null),
+    h('td', { class: 'num' }, c.ended_at ? dur(c.duration_ms) : h('span', { class: 'chip warn' }, 'live')),
+    h('td', {}, outcomeChip(c.outcome)),
+    h('td', { class: 'num' }, c.turns),
+    h('td', { class: 'num' }, latency(c.avg_latency_ms), ' / ', latency(c.max_latency_ms)),
+    h('td', { class: 'num' }, money(c.total_cost_usd), c.twilio_cost_usd === null && c.channel === 'phone' ? h('span', { title: 'Twilio not priced yet' }, '*') : null),
+  ));
+
+  app.replaceChildren(
+    h('h1', {}, 'Call log'),
+    h('div', { class: 'bar' },
+      h('label', {}, 'From'), from, h('label', {}, 'to'), to,
+      preset('Today', daysAgo(0), daysAgo(0)), preset('Yesterday', daysAgo(1), daysAgo(1)),
+      preset('7 days', daysAgo(6), daysAgo(0)), preset('30 days', daysAgo(29), daysAgo(0)),
+      env),
+    h('p', { class: 'summary' },
+      `${calls.length}${data.truncated ? '+' : ''} call${calls.length === 1 ? '' : 's'} · ${money(total)} total`
+      + (lat.length ? ` · avg latency ${Math.round(lat.reduce((a, b) => a + b, 0) / lat.length)} ms` : '')
+      + ` · times in ${TZ}`),
+    calls.length
+      ? h('div', { class: 'panel tablewrap' }, h('table', {},
+          h('thead', {}, h('tr', {}, h('th', {}, 'Started'), h('th', {}, 'Caller'), h('th', {}, 'Channel'), h('th', { class: 'num' }, 'Duration'),
+            h('th', {}, 'Outcome'), h('th', { class: 'num' }, 'Responses'), h('th', { class: 'num' }, 'Latency avg / max'), h('th', { class: 'num' }, 'Cost'))),
+          h('tbody', {}, rows)))
+      : h('div', { class: 'panel empty' }, 'No calls in this range.'),
+  );
+}
+
+// ---- one call ----
+async function showCall(id) {
+  let data;
+  try { data = await api('/api/calls/' + encodeURIComponent(id)); } catch (e) { return fail(e); }
+  TZ = data.timezone;
+  const c = data.call;
+  const events = data.events;
+  document.title = `Call ${when(c.started_at)} — 8Hands`;
+  let showAll = localStorage.getItem('calls.showAll') === '1';
+
+  const responses = new Map(events.filter((e) => e.kind === 'response').map((e) => [e.response_id, e]));
+  const spoke = new Set(events.filter((e) => e.kind === 'agent_message').map((e) => e.response_id));
+
+  const latencyText = (r) => {
+    const l = r?.payload?.latency;
+    if (!l || r.latency_ms === null) return null;
+    const parts = [`OpenAI ${Math.round(l.openaiMs)} ms`];
+    if (l.toolMs) parts.push(`tools ${Math.round(l.toolMs)} ms`);
+    if (l.silenceMs !== null && l.silenceMs !== undefined) parts.push(`silence heard ${Math.round(l.silenceMs)} ms`);
+    const what = l.trigger === 'call_start' ? 'greeting' : l.trigger === 'tool_result' ? 'after tools' : 'reply';
+    return h('span', {}, '⏱ ', latency(r.latency_ms), ` ${what} (${parts.join(', ')})`);
+  };
+  const usageText = (r) => {
+    const u = r?.payload?.response?.usage;
+    return u ? `${u.input_tokens} in (${u.input_token_details?.cached_tokens ?? 0} cached) · ${u.output_tokens} out` : '';
+  };
+
+  function item(e) {
+    const t = h('div', { class: 't' }, offset(e.t_ms));
+    const p = e.payload || {};
+    switch (e.kind) {
+      case 'caller_message':
+        return h('div', { class: 'ev' }, t, h('div', { class: 'bubble caller' }, h('div', { class: 'who' }, 'Caller'), e.text,
+          h('div', { class: 'sub' }, [p.typed ? 'typed' : secs(e.duration_ms) && `${secs(e.duration_ms)} speech`, num(e.cost_usd) ? `transcription ${money(e.cost_usd)}` : null].filter(Boolean).join(' · '))));
+      case 'agent_message': {
+        const r = responses.get(e.response_id);
+        return h('div', { class: 'ev' }, t, h('div', { class: 'bubble agent' }, h('div', { class: 'who' }, 'Agent'), e.text,
+          h('div', { class: 'sub' }, [secs(e.duration_ms ?? r?.duration_ms) && `${secs(e.duration_ms ?? r?.duration_ms)} audio`, r ? money(r.cost_usd) : null].filter(Boolean).join(' · '),
+            r && latencyText(r) ? [' · ', latencyText(r)] : null)));
+      }
+      case 'response': {
+        if (!showAll && spoke.has(e.response_id)) return null;
+        const label = spoke.has(e.response_id) ? 'Response' : 'Response (no speech)';
+        return h('div', { class: 'ev' }, t, h('div', { class: 'row' },
+          h('details', {}, h('summary', {}, `${label} · ${e.status} · ${money(e.cost_usd)}`, usageText(e) ? ` · ${usageText(e)}` : '', latencyText(e) ? [' · ', latencyText(e)] : null),
+            pretty(p))));
+      }
+      case 'tool_call': {
+        const st = e.status;
+        const cls = st === 'ok' || st === 'recovered' ? 'good' : st === 'blocked' ? 'warn' : 'bad';
+        return h('div', { class: 'ev' }, t, h('div', { class: 'row tool' },
+          h('details', {}, h('summary', {}, h('b', {}, e.tool_name), ' ', h('span', { class: 'chip ' + cls }, st), ` · ${Math.round(e.duration_ms ?? 0)} ms`,
+            p.result?.message ? h('div', { class: 'sub' }, p.result.message) : null),
+            h('div', { class: 'sub' }, 'Arguments'), pretty(p.args), h('div', { class: 'sub' }, 'Result'), pretty(p.result))));
+      }
+      case 'state_change':
+        if (!showAll) return null;
+        return h('div', { class: 'ev' }, t, h('div', { class: 'row' }, h('details', {}, h('summary', {}, `State after ${e.tool_name}`), pretty(p.state))));
+      case 'interrupt':
+        return h('div', { class: 'ev' }, t, h('div', { class: 'row' }, `Caller spoke over the agent · cut ${secs(p.cutMs)} of ${secs(p.streamedMs)}`));
+      case 'error':
+        return h('div', { class: 'ev' }, t, h('div', { class: 'row error' }, h('details', {}, h('summary', {}, `Error: ${e.text}`), pretty(p))));
+      default:
+        return h('div', { class: 'ev' }, t, h('div', { class: 'row' }, h('details', {}, h('summary', {}, e.kind), pretty(p))));
+    }
+  }
+
+  const timeline = h('div', { class: 'timeline' });
+  const renderTimeline = () => timeline.replaceChildren(...events.map(item).filter(Boolean));
+  const toggle = h('button', { class: showAll ? 'on' : '', onclick: () => {
+    showAll = !showAll;
+    try { localStorage.setItem('calls.showAll', showAll ? '1' : '0'); } catch {}
+    toggle.className = showAll ? 'on' : '';
+    renderTimeline();
+  } }, 'Show all events');
+  renderTimeline();
+
+  const stat = (label, value) => h('div', { class: 'panel stat' }, h('b', {}, value), h('span', {}, label));
+  app.replaceChildren(
+    h('a', { class: 'back', href: '/calls', onclick: (e) => { e.preventDefault(); history.length > 1 ? history.back() : (history.pushState(null, '', '/calls'), route()); } }, '← All calls'),
+    h('div', { class: 'head' }, h('h1', {}, when(c.started_at)), h('span', { class: 'chip' }, c.channel), h('span', { class: 'chip' }, c.environment),
+      outcomeChip(c.outcome), c.end_reason ? h('span', { class: 'chip' }, c.end_reason.replace('_', ' ')) : h('span', { class: 'chip warn' }, 'live')),
+    h('div', { class: 'grid' },
+      stat('Duration', dur(c.duration_ms)), stat('Responses', c.turns),
+      stat('Latency avg', latency(c.avg_latency_ms)), stat('Latency max', latency(c.max_latency_ms)),
+      stat('Tokens in / cached / out', `${c.input_tokens} / ${c.cached_tokens} / ${c.output_tokens}`)),
+    h('div', { class: 'grid' },
+      stat('OpenAI', money(c.openai_cost_usd)), stat('Transcription', money(c.transcription_cost_usd)),
+      stat('Twilio', c.channel === 'phone' ? (c.twilio_cost_usd === null ? 'pending' : money(c.twilio_cost_usd)) : 'n/a'),
+      stat('Total', money(c.total_cost_usd))),
+    h('p', { class: 'meta' }, [
+      c.caller_phone && `from ${c.caller_phone}`, c.called_phone && `to ${c.called_phone}`, c.model,
+      c.commit_sha && `commit ${c.commit_sha.slice(0, 7)}`, c.twilio_call_sid, `call ${c.id}`,
+    ].filter(Boolean).join(' · ')),
+    h('div', { class: 'bar' }, h('b', {}, `Timeline · ${events.length} events`), toggle),
+    timeline,
+    c.final_state ? h('details', { class: 'panel', style: 'margin-top:16px;padding:10px 12px' }, h('summary', {}, 'Final call state'), pretty(c.final_state)) : null,
+  );
+}
+
+function route() {
+  const m = location.pathname.match(/^\/calls\/([^/]+)$/);
+  window.scrollTo(0, 0);
+  return m ? showCall(decodeURIComponent(m[1])) : showList();
+}
+addEventListener('popstate', route);
+route();
+</script>
+</body>
+</html>

@@ -24,7 +24,8 @@ import { attachCall } from './core/transport';
 import { BUSINESS } from './business';
 import { endAllCalls } from './calls/recorder';
 import { db, migrate } from './db';
-import { hasPin, pinGateEnabled, pinPage, submitPin } from './http/pin-gate';
+import { hasPin, pinGateEnabled, pinPage, safeNext, submitPin } from './http/pin-gate';
+import { CallLogError, getCall, listCalls } from './calls/api';
 import { consumeStreamToken, issueStreamToken, streamTwiml, validTwilioSignature } from './integrations/twilio';
 import type { AgentSessionOptions } from './core/session';
 
@@ -85,13 +86,38 @@ const server = http.createServer(async (req, res) => {
             return sendHtml(res, 'index.html');
         }
         if (req.method === 'POST' && url === '/pin') {
-            const error = submitPin(req, res, String((await readForm(req)).pin ?? ''));
+            const form = await readForm(req);
+            const error = submitPin(req, res, String(form.pin ?? ''));
             if (error) {
                 res.writeHead(401, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
-                return res.end(pinPage(error));
+                return res.end(pinPage(error, form.next));
             }
-            res.writeHead(303, { location: '/' });
+            res.writeHead(303, { location: safeNext(form.next) });
             return res.end();
+        }
+
+        // Call log (PIN): /calls lists calls, /calls/<id> shows one; both are calls.html.
+        const { pathname, searchParams } = new URL(url, 'http://localhost');
+        if (req.method === 'GET' && (pathname === '/calls' || pathname.startsWith('/calls/'))) {
+            if (!hasPin(req)) {
+                res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+                return res.end(pinPage(undefined, url));
+            }
+            return sendHtml(res, 'calls.html');
+        }
+        if (req.method === 'GET' && (pathname === '/api/calls' || pathname.startsWith('/api/calls/'))) {
+            if (!hasPin(req)) return sendJson(res, 401, { code: 'pin_required', message: 'PIN required' });
+            try {
+                if (pathname === '/api/calls') {
+                    return sendJson(res, 200, await listCalls({
+                        from: searchParams.get('from'), to: searchParams.get('to'), environment: searchParams.get('environment'),
+                    }));
+                }
+                return sendJson(res, 200, await getCall(decodeURIComponent(pathname.slice('/api/calls/'.length))));
+            } catch (err) {
+                if (err instanceof CallLogError) return sendJson(res, err.status, { code: 'call_log', message: err.message });
+                throw err;
+            }
         }
         if (req.method === 'GET' && url.startsWith('/card-on-file')) return sendHtml(res, 'card-on-file.html');
 

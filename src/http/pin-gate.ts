@@ -54,7 +54,13 @@ export function submitPin(req: http.IncomingMessage, res: http.ServerResponse, p
     return null;
 }
 
-export function pinPage(error?: string): string {
+/** Where to go after the PIN: a local path only. */
+export function safeNext(next: unknown): string {
+    const s = String(next ?? '');
+    return s.startsWith('/') && !s.startsWith('//') ? s : '/';
+}
+
+export function pinPage(error?: string, next = '/'): string {
     return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>8Hands test</title>
 <style>body{font:16px system-ui;display:grid;place-items:center;height:100vh;margin:0;background:#f6f6f4}
@@ -62,6 +68,7 @@ form{display:grid;gap:12px;padding:28px;background:#fff;border-radius:12px;box-s
 input{font:24px ui-monospace,monospace;letter-spacing:.3em;text-align:center;width:9ch;padding:8px}
 button{font:16px system-ui;padding:8px}.e{color:#b00020;margin:0;text-align:center}</style></head>
 <body><form method="post" action="/pin"><label for="pin">Enter PIN</label>
+<input type="hidden" name="next" value="${safeNext(next).replace(/[&"<>]/g, (c) => `&#${c.charCodeAt(0)};`)}">
 <input id="pin" name="pin" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="off" autofocus required>
 ${error ? `<p class="e">${error}</p>` : ''}<button>Open</button></form></body></html>`;
 }

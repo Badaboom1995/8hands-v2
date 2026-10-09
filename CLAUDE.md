@@ -232,7 +232,9 @@ In this repo:
 - Call log: tables `calls` (one row per call: channel, caller, duration, end reason, tokens,
   OpenAI / transcription / Twilio cost, avg/max latency, final state, outcome) and `call_events`
   (ordered, untruncated: `caller_message`, `agent_message`, `response`, `tool_call`, `state_change`,
-  `interrupt`, `error`). The session emits `TraceEvent`s (`core/trace.ts`) via `onTrace`;
+  `interrupt`, `error`). UI: `/calls` (PIN; date range in business time, environment filter, one row
+  per call) and `/calls/<id>` (stats, costs, timeline), one page `web/calls.html` over
+  `GET /api/calls?from&to&environment` and `GET /api/calls/<id>` (`calls/api.ts`). The session emits `TraceEvent`s (`core/trace.ts`) via `onTrace`;
   `calls/recorder.ts` buffers and batch-writes them off the audio path, dumps to stdout if the DB
   stays down, closes live calls' logs on SIGTERM, and fills `twilio_cost_usd` from Twilio's
   Calls API 1–15 min after hang-up. Cost is per **response** (caller audio is billed in the next
