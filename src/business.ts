@@ -41,6 +41,7 @@ export interface BusinessProfile {
         level: string;
         design: string;
         day: string;
+        nailCount: string;
     };
     /**
      * How the main service is said in a read-back, from area, finish, extensions
@@ -81,21 +82,31 @@ export interface BusinessProfile {
     /** Provider locations the agent books for, by name. Others (e.g. a default test location) are ignored. */
     studios: string[];
     /**
-     * Visit history rules (refill, free fix). Windows are calendar days in the
-     * business time zone, inclusive. Services by provider item name.
+     * Services that depend on the caller's visit history. The agent learns the
+     * process from free_fix_instructions / refill_instructions; the server checks
+     * the rules against provider history before any search or booking. Windows
+     * are calendar days from the visit to the appointment, in the business time
+     * zone, inclusive. Services by provider item name.
      */
     history: {
         /** How far back to read bookings. */
         lookbackDays: number;
         /** Visits that count as extensions done here (a new set or a refill). */
         extensionServices: string[];
-        /** Refill only when the last extensions visit was this many days ago. */
-        refillDays: { min: number; max: number };
-        /** A repair is free when the last visit was at most this many days ago. */
-        freeFixDays: number;
-        /** Repairs: they never start a new free-fix window themselves. */
-        repairServices: string[];
+        /** Free repair, one appointment for 1..maxRepairNails nails, with the master of the last visit. */
+        freeFix: HistoryService & { days: number };
+        /** Paid repair, the service booked once per nail, any master. */
+        paidRepair: HistoryService;
+        /** Refill of extensions done here, days after the last extensions visit. */
+        refill: HistoryService & { days: { min: number; max: number } };
+        /** More nails than this: the front desk sets the time. */
+        maxRepairNails: number;
     };
+}
+
+/** A catalog service the history rules apply to, and how the agent says it. */
+export interface HistoryService extends CatalogRef {
+    words: string;
 }
 
 export const ZORINA: BusinessProfile = {
@@ -132,6 +143,7 @@ export const ZORINA: BusinessProfile = {
         level: 'Which level of technician would you like — Junior, Master, or Top?',
         design: 'Would you like to add a nail design, or is there anything special you\'d like?',
         day: 'What day and time would work for you?',
+        nailCount: 'How many nails need to be fixed?',
     },
     serviceWords: {
         area: { manicure: 'manicure', pedicure: 'pedicure', extensions: 'extensions' },
@@ -183,12 +195,14 @@ export const ZORINA: BusinessProfile = {
     studios: ['Pacific Avenue', 'Union Street'],
     // Owner (2026-10-08): outside the refill window → front desk; any visit counts for a
     // free fix; day 7 inclusive; a paid repair can be done by any master.
+    // Windows counted to the appointment date (our default; not confirmed by the owner).
     history: {
         lookbackDays: 90,
         extensionServices: ['Nail Extension', 'Nail Extension Refill'],
-        refillDays: { min: 28, max: 35 },
-        freeFixDays: 7,
-        repairServices: ['FREE Fix', 'Extension for 1 nail'],
+        freeFix: { service: 'FREE Fix', words: 'free nail fix', days: 7 },
+        paidRepair: { service: 'Extension for 1 nail', words: 'nail repair' },
+        refill: { service: 'Nail Extension Refill', words: 'extensions refill', days: { min: 28, max: 35 } },
+        maxRepairNails: 5,
     },
 };
 

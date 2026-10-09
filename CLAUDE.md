@@ -176,12 +176,18 @@ In this repo:
     pick to one of them (`bindSlot`) and returns a server-built `readBack`.
     `square_book` takes no args and books only the slot whose read-back the caller last
     heard (fingerprint), after phone → one customer with a card → live re-check.
-  - `tools/square/history.ts` — `square_visit_history` (report, no args): the identified caller's
-    past visits (last `history.lookbackDays`, past + `ACCEPTED` only) and server-decided
-    eligibility: `repair` = free_fix | free_fix_unclear_master | paid, `refill` = eligible |
-    too_early | too_late | no_recent_extensions. Rules are `BUSINESS.history` (windows inclusive,
-    business-timezone calendar days; repairs don't restart the free-fix window). Result kept in
-    `CallState.history` with provider ids for booking the original master; the model gets names only.
+  - History services (free fix, paid repair, refill) are ordinary services the model saves with
+    `update_call_state` (`service`/`option`; `quantity` = nails for a repair). The process is
+    loaded on demand: `free_fix_instructions` / `refill_instructions`
+    (`tools/square/history-instructions.ts`, built from `BUSINESS.history` + live catalog), so the
+    session prompt stays small. `square_visit_history` (`tools/square/history.ts`) returns facts
+    only: past `ACCEPTED` visits, newest first (day, daysAgo, services, masters, studio,
+    extensions). The server enforces the rules in `historyGate`, called by `square_availability`
+    (clamps the dates; free fix searches only the last visit's master) and `square_book` (exact
+    slot): free fix = last non-repair visit ≤ `freeFix.days` before the appointment, same master;
+    refill = appointment `refill.days.min..max` after the last extensions visit; > `maxRepairNails`
+    → front desk. Windows count to the appointment date (our default, not confirmed by the owner).
+    Visits are cached per call outside `CallState`. Paid repair = its service once per nail.
     Unit tests: `bun test`.
   - `tools/card-link.ts` — `send_card_link(email)`, starts card-on-file enrollment.
   - Caller ID: `AgentSessionOptions.callerPhone`; the browser test UI sends it as `/ws?phone=`.

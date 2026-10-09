@@ -41,6 +41,7 @@ export const CallStatePatch = z.object({
     customerPhone: z.string().min(1).optional(),
     customerEmail: z.string().min(3).optional(),
     firstVisit: z.boolean().optional(),
+    quantity: z.number().int().min(1).max(20).optional().describe('How many, e.g. nails to fix.'),
     notes: z.string().min(1).optional().describe('Anything else relevant, one short line.'),
 }).strict().refine((p) => Object.keys(p).length > 0, { message: 'Provide at least one field.' });
 
@@ -66,6 +67,8 @@ export interface CallState {
     customerPhone?: string;
     customerEmail?: string;
     firstVisit?: boolean;
+    /** How many of the main service, e.g. nails to fix. */
+    quantity?: number;
     /** Appended, never overwritten. */
     notes: string[];
     /** Every open time from the last availability search. Server only. */
@@ -92,42 +95,6 @@ export interface CallState {
     customerLookup?: Promise<void>;
     /** Other phones/emails tried to find the profile. Server only. */
     identifyAttempts?: number;
-    /** The caller's recent visits and what they qualify for. Server only; the model sees a summary. */
-    history?: VisitHistory;
-}
-
-/** One past visit: a past, accepted booking. */
-export interface Visit {
-    /** Local date YYYY-MM-DD. */
-    date: string;
-    /** "Mon, Oct 5" */
-    day: string;
-    /** Calendar days before today, in the business time zone. */
-    daysAgo: number;
-    /** Provider item names, in booking order. */
-    services: string[];
-    masters: string[];
-    studio: string;
-    extensions: boolean;
-    /** Provider ids, to book the same master or studio later. Never shown to the model. */
-    ref: { bookingId: string; locationId: string; teamMemberIds: string[] };
-}
-
-/**
- * What the caller's history qualifies them for. Decided by the server from
- * provider bookings, never from what the caller says.
- * repair: free_fix (with the original master), free_fix_unclear_master (several
- * masters on the last visit day), paid (any master).
- * refill: eligible, too_early / too_late (outside the window: front desk),
- * no_recent_extensions (none in the lookback).
- */
-export interface VisitHistory {
-    customerId: string;
-    visits: Visit[];
-    lastVisit?: Visit;
-    lastExtensions?: Visit;
-    repair: 'free_fix' | 'free_fix_unclear_master' | 'paid';
-    refill: 'eligible' | 'too_early' | 'too_late' | 'no_recent_extensions';
 }
 
 /** The caller resolved to a booking-provider customer, never guessed between duplicates. */
@@ -180,7 +147,7 @@ export interface SlotRef {
 /** Fields a chosen slot depends on; changing one drops the slot. */
 export const SLOT_INPUTS = [
     'area', 'finish', 'extensionsType', 'extensionsLength', 'level', 'service', 'option', 'design', 'addons',
-    'location', 'master', 'date',
+    'location', 'master', 'date', 'quantity',
 ] as const;
 
 /**
@@ -193,20 +160,31 @@ function missingForBooking(s: CallState): string[] {
         if (applies && s[field] === undefined) out.push(field);
     };
     const nails = s.area === 'manicure' || s.area === 'pedicure';
-    need('area');
+    // A history service (free fix, paid repair, refill) is chosen by name, not by area, finish, and level.
+    const special = historyService(s.service);
+    const repair = special === 'freeFix' || special === 'paidRepair';
+    need('area', !repair);
+    need('quantity', repair);
     need('finish', nails);
     need('extensionsType', s.area === 'extensions');
     need('extensionsLength', s.area === 'extensions' && s.extensionsType === 'new_set');
     need('location');
     need('customerPhone', !s.callerPhone); // hidden caller ID: ask for the number
     need('firstVisit', s.customer?.status === 'not_found');
-    need('level', !s.master); // a named master's level is theirs
+    need('level', !s.master && !special); // a named master's level is theirs
     need('design', s.area === 'extensions' || s.finish === 'gel' || s.finish === 'regular');
     need('date');
     need('service');
     need('option');
     need('time', Boolean(s.offeredSlots?.length)); // a pick from offered times, not a question
     return out;
+}
+
+/** Which history service (free fix, paid repair, refill) a catalog service name is, if any. */
+export function historyService(service: string | undefined): 'freeFix' | 'paidRepair' | 'refill' | undefined {
+    if (!service) return undefined;
+    const h = BUSINESS.history;
+    return (['freeFix', 'paidRepair', 'refill'] as const).find((k) => normalize(h[k].service) === normalize(service));
 }
 
 export function createCallState(callerPhone?: string): CallState {
@@ -346,7 +324,7 @@ export function fingerprint(state: CallState): string | undefined {
     if (!s) return undefined;
     return [
         s.startAt, s.ref.locationId, ...s.ref.segments.map((x) => `${x.teamMemberId}:${x.serviceVariationId}`),
-        state.design ?? '', state.designDescription ?? '', (state.addons ?? []).join(','),
+        state.design ?? '', state.designDescription ?? '', (state.addons ?? []).join(','), state.quantity ?? '',
     ].join('|');
 }
 
@@ -365,6 +343,12 @@ export function readBack(state: CallState): string | undefined {
 
 /** The main service from confirmed facts, as the business says it: "gel manicure, Master level". */
 export function serviceWords(state: CallState): string | undefined {
+    const special = historyService(state.service);
+    if (special) {
+        const what = BUSINESS.history[special].words;
+        const n = state.quantity;
+        return n && special !== 'refill' ? `${what}, ${n} ${n === 1 ? 'nail' : 'nails'}` : what;
+    }
     if (!state.area) return undefined;
     const w = BUSINESS.serviceWords;
     const kind = state.area === 'extensions'
@@ -399,7 +383,7 @@ export function needsReadBack(state: CallState): boolean {
 /** Server-only fields; never shown to the model. */
 const HIDDEN = new Set([
     'notes', 'offeredSlots', 'slot', 'filledBySlot', 'searchWindow', 'reviewed', 'booking', 'callId', 'callerPhone',
-    'customer', 'customerLookup', 'identifyAttempts', 'history',
+    'customer', 'customerLookup', 'identifyAttempts',
 ]);
 
 /** What the model sees after each save: confirmed facts and what is still missing. */

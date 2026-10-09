@@ -4,12 +4,17 @@
 
 import { z } from 'zod';
 
+import { BUSINESS } from '../../business';
 import { defineTool } from '../../core/tools';
 import { ISO_DATE } from '../../core/state';
 import { listBookableTeam, listServiceItems, type SquareLocation } from '../../integrations/square';
 import { bookableAppointment } from './compose';
 import { dayLabel, groupServices, listStudios, localDate, matchByName, normalize, spread, staffNames } from './shared';
+import { addDays, historyGate } from './history';
 import { findSlots } from './slots';
+
+/** Days in [from, to], both YYYY-MM-DD. */
+const daysFrom = (from: string, to: string) => Math.round((Date.parse(to) - Date.parse(from)) / 86_400_000) + 1;
 
 const TIMES_PER_DAY = 6;
 const MAX_DAYS_SHOWN = 7;
@@ -39,11 +44,25 @@ export const squareAvailabilityTool = defineTool({
         const bookable = await bookableAppointment(ctx.state, groupServices(items));
         if ('blocked' in bookable) return bookable;
         const { appointment, note } = bookable;
-        const labels = appointment.parts.map((p) => p.label);
+        const labels = [...new Set(appointment.parts.map((p) => p.label))];
+
+        // Free fix, refill: the history decides the dates (and for a free fix, the master).
+        const firstDay = args.startDate ?? localDate(Date.now(), BUSINESS.timezone);
+        const gate = await historyGate(ctx.state, {
+            from: firstDay, to: addDays(firstDay, (args.days ?? 1) - 1), master: args.master ?? ctx.state.master,
+        });
+        if ('blocked' in gate) return gate;
+        const startDate = gate.from ?? args.startDate;
+        const days = gate.from && gate.to ? daysFrom(gate.from, gate.to) : args.days ?? 1;
 
         // Master → team member id, who must do every part.
         let teamMemberIds = appointment.performers;
-        if (args.master && normalize(args.master) !== 'any') {
+        if (gate.teamMemberIds) {
+            if (!gate.teamMemberIds.every((id) => appointment.performers.includes(id))) {
+                return { blocked: 'handoff', message: 'The master of the last visit can\'t be booked for this by phone. The front desk will arrange it and call back.' };
+            }
+            teamMemberIds = gate.teamMemberIds;
+        } else if (args.master && normalize(args.master) !== 'any') {
             const found = matchByName(args.master, team, (m) => names.get(m.id)!);
             if (found.length !== 1) {
                 return {
@@ -85,7 +104,7 @@ export const squareAvailabilityTool = defineTool({
         const { perLocation, window } = await findSlots({
             variationIds: appointment.parts.map((p) => p.variationId),
             locations, names, teamMemberIds, price: appointment.totalPrice,
-            startDate: args.startDate, days: args.days ?? 1, partOfDay: args.partOfDay,
+            startDate, days, partOfDay: args.partOfDay,
         });
         // Every open time goes into state, so the caller's pick binds to an exact slot.
         ctx.state.offeredSlots = perLocation.flatMap((l) => l.slots);

@@ -8,9 +8,10 @@ import crypto from 'node:crypto';
 import { z } from 'zod';
 
 import { customerGate } from '../../card/identify';
-import { addonWords, fingerprint, readBack, type CallState, type Slot } from '../../core/state';
+import { addonWords, fingerprint, historyService, readBack, type CallState, type Slot } from '../../core/state';
 import { defineTool } from '../../core/tools';
 import { createBooking, searchAvailability, SquareError } from '../../integrations/square';
+import { historyGate } from './history';
 import { slotTaken } from './research';
 
 export const squareBookTool = defineTool({
@@ -36,6 +37,12 @@ export const squareBookTool = defineTool({
         if (fingerprint(state) !== state.reviewed) {
             state.reviewed = fingerprint(state);
             return { blocked: 'review', message: 'Read this to the caller and ask them to confirm first.', readBack: readBack(state) };
+        }
+
+        // Free fix, refill: the history rules, once more, for exactly this slot.
+        for (const seg of new Set(slot.ref.segments.map((x) => x.teamMemberId))) {
+            const ok = await historyGate(state, { from: slot.date, to: slot.date, teamMemberId: seg });
+            if ('blocked' in ok) return ok;
         }
 
         const ref = slot.ref;
@@ -96,6 +103,7 @@ function sellerNote(state: CallState): string {
         parts.push(`Design: ${state.designDescription ?? state.design} (level ${state.design}).`);
     }
     if (state.addons?.length) parts.push(`Add-ons: ${addonWords(state.addons)}.`);
+    if (state.quantity && historyService(state.service) !== 'refill') parts.push(`Nails: ${state.quantity}.`);
     if (state.notes.length) parts.push(`Notes: ${state.notes.join('; ')}.`);
     return parts.join(' ');
 }

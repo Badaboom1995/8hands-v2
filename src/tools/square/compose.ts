@@ -3,7 +3,7 @@
 // are done. Server only; the model sees labels, totals and times.
 
 import { BUSINESS, type CatalogRef } from '../../business';
-import { serviceWords, type CallState } from '../../core/state';
+import { historyService, serviceWords, type CallState } from '../../core/state';
 import { listServiceItems, type SquareVariation } from '../../integrations/square';
 import { groupServices, matchByName, minutes, optionName, price, type Service } from './shared';
 
@@ -81,6 +81,11 @@ export async function composeAppointment(state: CallState, services?: Service[])
 
     if (state.service) {
         part('main', serviceWords(state) ?? state.service, { service: state.service, option: state.option });
+        // A paid repair is its service once per nail; a free fix is one appointment.
+        const main = parts.at(-1);
+        if (historyService(state.service) === 'paidRepair' && main?.role === 'main') {
+            for (let i = 1; i < (state.quantity ?? 1); i++) parts.push({ ...main });
+        }
     } else {
         problems.push({ role: 'main', label: 'main service', message: 'not chosen yet (service/option empty)' });
     }
@@ -109,8 +114,9 @@ export async function composeAppointment(state: CallState, services?: Service[])
         parts,
         totalMinutes: parts.reduce((sum, p) => sum + (p.minutes ?? 0), 0),
         cents,
-        totalPrice: new Intl.NumberFormat('en-US', { style: 'currency', currency, maximumFractionDigits: cents % 100 ? 2 : 0 })
-            .format(cents / 100),
+        totalPrice: cents === 0 && parts.length ? 'free'
+            : new Intl.NumberFormat('en-US', { style: 'currency', currency, maximumFractionDigits: cents % 100 ? 2 : 0 })
+                .format(cents / 100),
         performers: parts.length
             ? parts.map((p) => p.performers).reduce((a, b) => a.filter((id) => b.includes(id)))
             : [],

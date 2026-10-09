@@ -18,6 +18,7 @@ import { squareBookTool } from './tools/square/book';
 import { squareMastersTool } from './tools/square/masters';
 import { squareServicesTool } from './tools/square/services';
 import { squareVisitHistoryTool } from './tools/square/history';
+import { freeFixInstructionsTool, refillInstructionsTool } from './tools/square/history-instructions';
 import { updateCallStateTool } from './tools/update-state';
 import { attachCall } from './core/transport';
 import { BUSINESS } from './business';
@@ -143,7 +144,8 @@ const sessionOptions = (): Omit<AgentSessionOptions, 'audioFormat' | 'callerPhon
     model: MODEL,
     instructions: instructionsV2(),
     greeting: GREETING,
-    tools: [updateCallStateTool, squareServicesTool, squareMastersTool, squareAvailabilityTool, squareBookTool, squareVisitHistoryTool, sendCardLinkTool],
+    tools: [updateCallStateTool, squareServicesTool, squareMastersTool, squareAvailabilityTool, squareBookTool, squareVisitHistoryTool,
+        freeFixInstructionsTool, refillInstructionsTool, sendCardLinkTool],
     onCallStart: startCallerLookup,
     debug: DEBUG,
 });
